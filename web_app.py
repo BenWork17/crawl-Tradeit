@@ -56,14 +56,12 @@ def _read_page(page: int) -> list[Any]:
 def _cookie_from_form() -> str:
     token = request.form.get("token", "").strip()
     refresh = request.form.get("refresh_token", "").strip()
-    if token or refresh:
-        parts = []
-        if token:
-            parts.append(f"{crawler.CRM_TOKEN_NAME}={token}")
-        if refresh:
-            parts.append(f"{crawler.CRM_RF_TOKEN_NAME}={refresh}")
-        return "; ".join(parts)
-    return request.form.get("cookie", "").strip()
+    parts = []
+    if token:
+        parts.append(f"{crawler.CRM_TOKEN_NAME}={token}")
+    if refresh:
+        parts.append(f"{crawler.CRM_RF_TOKEN_NAME}={refresh}")
+    return "; ".join(parts)
 
 
 def _update(**values: Any) -> None:

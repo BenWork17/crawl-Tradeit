@@ -33,11 +33,9 @@
   <div class="grid">
     <section class="card">
       <form method="post" action="/api/jobs" onsubmit="return confirmStart()">
-        <label>Cookie đầy đủ (dùng nếu không nhập hai ô bên dưới)</label>
-        <input name="cookie" type="password" autocomplete="new-password" placeholder="_TaaS.auth.crm.token=...; ...">
         <div class="row">
-          <div><label>Hoặc token mới</label><input name="token" type="password" autocomplete="new-password"></div>
-          <div><label>Refresh token mới</label><input name="refresh_token" type="password" autocomplete="new-password"></div>
+          <div><label>Token</label><input name="token" type="password" autocomplete="off" required></div>
+          <div><label>Refresh token</label><input name="refresh_token" type="password" autocomplete="off" required></div>
         </div>
         <div class="row">
           <div><label>Importer</label><input name="importer" value="netherland"></div>
@@ -55,7 +53,7 @@
         <button type="submit">Bắt đầu crawl</button>
         <button class="secondary" type="submit" formaction="/api/jobs/stop">Dừng</button>
       </form>
-      <p class="note">Cookie chỉ được giữ trong bộ nhớ khi job đang chạy, không hiển thị lại và không lưu vào file.</p>
+      <p class="note">Nhập riêng hai giá trị token. Cookie chỉ được giữ trong bộ nhớ khi job đang chạy, không hiển thị lại và không lưu vào file.</p>
     </section>
     <aside class="card">
       <div class="muted">Trạng thái</div><div id="status" class="stat status">{{ job.status }}</div>

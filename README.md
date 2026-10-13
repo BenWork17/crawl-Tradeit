@@ -64,8 +64,8 @@ python web_app.py
 Mở `http://localhost:5000`. Khi triển khai Render/Railway, dùng lệnh
 `gunicorn --bind 0.0.0.0:$PORT web_app:app` (đã có sẵn trong `Procfile`).
 Có thể dùng `Dockerfile` để triển khai trên bất kỳ nền tảng container nào.
-Nếu trình duyệt tự điền cookie cũ vào ô cookie đầy đủ, hãy nhập token mới ở
-hai ô riêng; ứng dụng sẽ ưu tiên hai ô token này.
+Trên giao diện web, nhập token và refresh token ở hai ô riêng để tránh nhầm
+cookie cũ.
 
 Trên Windows local, không chạy lệnh `gunicorn` trong PowerShell. Hãy dùng:
 
