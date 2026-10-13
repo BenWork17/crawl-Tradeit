@@ -54,7 +54,7 @@
     </section>
     <aside class="card">
       <div class="muted">Trạng thái</div><div id="status" class="stat status">{{ job.status }}</div>
-      <div class="muted">Trang hiện tại</div><div id="page" class="stat">{{ job.page }}</div>
+      <div class="muted">Trang đang xử lý / tiếp theo</div><div id="page" class="stat">{{ job.page }}</div>
       <div class="muted">Đã xử lý</div><div id="records" class="stat">{{ job.records }}</div>
       <p id="message" class="note">{{ job.message }}</p>
       <form method="post" action="/api/export"><button type="submit">Tải CSV đã gộp</button></form>

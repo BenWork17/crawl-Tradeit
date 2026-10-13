@@ -59,15 +59,35 @@ def _run(options: dict[str, Any]) -> None:
     session = requests.Session()
     body = {"importer": options["importer"], "hsCode": options["hs_code"]}
     try:
+        if not options["force"]:
+            saved_state = crawler.load_state()
+            if saved_state:
+                total = saved_state.get("total")
+            if crawler.DATA_DIR.is_dir():
+                for page_file in crawler.DATA_DIR.glob("*.json"):
+                    try:
+                        existing_page = int(page_file.stem)
+                    except ValueError:
+                        continue
+                    records += crawler.count_records_in_file(existing_page)
         crawler.log_cookie_used(cookie)
-        _update(status="running", message=f"Đang crawl trang {page}", page=page)
+        _update(
+            status="running",
+            message=f"Đang tìm trang tiếp theo từ trang {page}",
+            page=page,
+            records=records,
+            total=total,
+        )
         while not stop_event.is_set():
             if options["end_page"] is not None and page > options["end_page"]:
                 break
             if not options["force"] and crawler.page_file_path(page).exists():
                 existing = crawler.count_records_in_file(page)
-                records += existing
-                _update(page=page, records=records, message=f"Bỏ qua trang {page} đã có dữ liệu")
+                _update(
+                    page=page,
+                    records=records,
+                    message=f"Bỏ qua trang {page} đã có dữ liệu; đang tìm trang tiếp theo",
+                )
                 if existing < options["per_page"]:
                     break
                 page += 1
@@ -101,7 +121,13 @@ def _run(options: dict[str, Any]) -> None:
         else:
             _update(status="completed", message=f"Hoàn tất: {records} bản ghi")
     except (crawler.AuthError, crawler.CreditError) as exc:
-        _update(status="error", message=f"Cookie hoặc credit không hợp lệ: {exc}")
+        _update(
+            status="error",
+            message=f"Cookie hoặc credit không hợp lệ ở trang {page}: {exc}. "
+            f"Dữ liệu cũ vẫn được giữ nguyên.",
+            records=records,
+            total=total,
+        )
     except (requests.RequestException, RuntimeError, OSError, ValueError) as exc:
         _update(status="error", message=str(exc))
     finally:
