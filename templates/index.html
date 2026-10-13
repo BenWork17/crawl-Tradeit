@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TradeIT Crawler</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; background: #0f172a; color: #e2e8f0; }
+    main { max-width: 980px; margin: 0 auto; padding: 40px 20px; }
+    h1 { margin: 0 0 8px; font-size: 32px; } .muted { color: #94a3b8; }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 20px; margin-top: 28px; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 22px; }
+    label { display: block; margin: 14px 0 6px; color: #cbd5e1; font-size: 14px; }
+    input { box-sizing: border-box; width: 100%; padding: 11px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button { margin-top: 20px; padding: 11px 16px; border: 0; border-radius: 8px; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; }
+    button.secondary { background: #475569; color: white; margin-left: 8px; }
+    .stat { font-size: 27px; font-weight: 700; margin: 7px 0 18px; } .status { color: #38bdf8; }
+    .note { font-size: 13px; line-height: 1.5; color: #94a3b8; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>TradeIT Crawler</h1>
+  <div class="muted">Giao diện chạy crawl và xuất danh sách buyer</div>
+  <div class="grid">
+    <section class="card">
+      <form method="post" action="/api/jobs" onsubmit="return confirmStart()">
+        <label>Cookie đầy đủ (ưu tiên)</label>
+        <input name="cookie" type="password" autocomplete="off" placeholder="_TaaS.auth.crm.token=...; ...">
+        <div class="row">
+          <div><label>Hoặc token</label><input name="token" type="password" autocomplete="off"></div>
+          <div><label>Refresh token</label><input name="refresh_token" type="password" autocomplete="off"></div>
+        </div>
+        <div class="row">
+          <div><label>Importer</label><input name="importer" value="netherland"></div>
+          <div><label>HS Code</label><input name="hs_code" value="090411"></div>
+        </div>
+        <div class="row">
+          <div><label>Trang bắt đầu</label><input name="start_page" type="number" min="1" value="1"></div>
+          <div><label>Trang kết thúc (tuỳ chọn)</label><input name="end_page" type="number" min="1"></div>
+        </div>
+        <div class="row">
+          <div><label>Số bản ghi/trang</label><input name="per_page" type="number" min="1" max="50" value="50"></div>
+          <div><label Delay (giây)</label><input name="delay" type="number" min="0" step="0.1" value="1.5"></div>
+        </div>
+        <label><input name="force" type="checkbox" style="width:auto"> Crawl lại và ghi đè trang đã có</label>
+        <button type="submit">Bắt đầu crawl</button>
+        <button class="secondary" type="submit" formaction="/api/jobs/stop">Dừng</button>
+      </form>
+      <p class="note">Cookie chỉ được giữ trong bộ nhớ khi job đang chạy, không hiển thị lại và không lưu vào file.</p>
+    </section>
+    <aside class="card">
+      <div class="muted">Trạng thái</div><div id="status" class="stat status">{{ job.status }}</div>
+      <div class="muted">Trang hiện tại</div><div id="page" class="stat">{{ job.page }}</div>
+      <div class="muted">Đã xử lý</div><div id="records" class="stat">{{ job.records }}</div>
+      <p id="message" class="note">{{ job.message }}</p>
+      <form method="post" action="/api/export"><button type="submit">Tải CSV đã gộp</button></form>
+    </aside>
+  </div>
+</main>
+<script>
+  async function refresh() {
+    const data = await fetch('/api/status').then(r => r.json());
+    for (const key of ['status', 'page', 'records', 'message']) document.getElementById(key).textContent = data[key] ?? '-';
+  }
+  setInterval(refresh, 2000);
+  function confirmStart() { return true; }
+</script>
+</body>
+</html>

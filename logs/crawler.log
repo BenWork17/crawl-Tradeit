@@ -1,0 +1,17 @@
+2026-10-10 17:25:24 [INFO] Bắt đầu crawl từ curPage=1
+2026-10-10 17:25:27 [INFO] Saved data/1.json
+2026-10-10 17:25:27 [INFO] GET curPage=1 ... 200 OK, rowCount=50, credit=2500, crawled=50/39278
+2026-10-10 17:25:31 [INFO] Saved data/2.json
+2026-10-10 17:25:31 [INFO] GET curPage=2 ... 200 OK, rowCount=50, credit=2000, crawled=100/39278
+2026-10-10 17:25:36 [INFO] Saved data/3.json
+2026-10-10 17:25:36 [INFO] GET curPage=3 ... 200 OK, rowCount=50, credit=1500, crawled=150/39278
+2026-10-10 17:25:41 [INFO] Saved data/4.json
+2026-10-10 17:25:41 [INFO] GET curPage=4 ... 200 OK, rowCount=50, credit=1000, crawled=200/39278
+2026-10-10 17:25:46 [INFO] Saved data/5.json
+2026-10-10 17:25:46 [INFO] GET curPage=5 ... 200 OK, rowCount=50, credit=500, crawled=250/39278
+2026-10-10 17:25:51 [INFO] Saved data/6.json
+2026-10-10 17:25:51 [INFO] GET curPage=6 ... 200 OK, rowCount=50, credit=0, crawled=300/39278
+2026-10-10 17:25:52 [WARNING] Dừng do lỗi xác thực/credit: HTTP 400 code=credit.CREDIT_NOT_ENOUGH
+2026-10-10 17:36:03 [INFO] Đã nhận Ctrl+C. Lưu state curPage=7.
+2026-10-10 17:36:03 [INFO] Dừng bởi người dùng tại curPage=7.
+2026-10-10 17:36:03 [INFO] Đã crawl xong. Tổng: 6 files, 300 records (phiên này: 6 files).
