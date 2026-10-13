@@ -33,11 +33,11 @@
   <div class="grid">
     <section class="card">
       <form method="post" action="/api/jobs" onsubmit="return confirmStart()">
-        <label>Cookie đầy đủ (ưu tiên)</label>
-        <input name="cookie" type="password" autocomplete="off" placeholder="_TaaS.auth.crm.token=...; ...">
+        <label>Cookie đầy đủ (dùng nếu không nhập hai ô bên dưới)</label>
+        <input name="cookie" type="password" autocomplete="new-password" placeholder="_TaaS.auth.crm.token=...; ...">
         <div class="row">
-          <div><label>Hoặc token</label><input name="token" type="password" autocomplete="off"></div>
-          <div><label>Refresh token</label><input name="refresh_token" type="password" autocomplete="off"></div>
+          <div><label>Hoặc token mới</label><input name="token" type="password" autocomplete="new-password"></div>
+          <div><label>Refresh token mới</label><input name="refresh_token" type="password" autocomplete="new-password"></div>
         </div>
         <div class="row">
           <div><label>Importer</label><input name="importer" value="netherland"></div>
