@@ -79,6 +79,14 @@ không nên bật debug hoặc chia sẻ URL dashboard công khai nếu chưa th
 Các file `data/`, `state.json` và CSV trên hosting miễn phí có thể mất khi
 container khởi động lại; hãy dùng persistent disk hoặc tải CSV sau mỗi phiên.
 
+### Xem và chọn file trên web
+
+Phần **File đã crawl** trên dashboard liệt kê từng `data/<trang>.json`. Có thể
+bấm **Xem / sửa**, chỉnh JSON dạng mảng rồi bấm **Lưu thay đổi**. Khi tải CSV,
+chỉ những file được tick mới được gộp; dùng **Chọn tất cả** nếu muốn gộp toàn bộ
+file hiện có. Nếu không chọn file nào, hệ thống không tạo bản tải xuống để tránh
+nhầm dữ liệu.
+
 ### CLI
 
 | Flag | Mặc định | Mô tả |

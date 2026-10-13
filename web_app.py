@@ -32,6 +32,27 @@ job: dict[str, Any] = {
 stop_event = threading.Event()
 
 
+def _page_path(raw_page: str) -> Path:
+    """Resolve a page number to a data file without allowing path traversal."""
+    try:
+        page = int(raw_page)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Số trang không hợp lệ") from exc
+    if page < 1:
+        raise ValueError("Số trang phải lớn hơn 0")
+    return crawler.page_file_path(page)
+
+
+def _read_page(page: int) -> list[Any]:
+    path = _page_path(str(page))
+    if not path.is_file():
+        raise FileNotFoundError(f"Không tìm thấy file trang {page}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError(f"File trang {page} không chứa một mảng dữ liệu")
+    return payload
+
+
 def _cookie_from_form() -> str:
     full_cookie = request.form.get("cookie", "").strip()
     if full_cookie:
@@ -196,10 +217,76 @@ def status():
         return jsonify(dict(job))
 
 
+@app.get("/api/files")
+def list_files():
+    files = []
+    if crawler.DATA_DIR.is_dir():
+        for path in sorted(crawler.DATA_DIR.glob("*.json"), key=merge_data.page_number):
+            page = merge_data.page_number(path)
+            if page >= 10**9:
+                continue
+            try:
+                count = len(_read_page(page))
+                size = path.stat().st_size
+                updated_at = path.stat().st_mtime
+            except (OSError, ValueError, json.JSONDecodeError):
+                count, size, updated_at = 0, path.stat().st_size, None
+            files.append(
+                {
+                    "page": page,
+                    "name": path.name,
+                    "records": count,
+                    "size": size,
+                    "updated_at": updated_at,
+                }
+            )
+    return jsonify(files)
+
+
+@app.get("/api/files/<page>")
+def get_file(page: str):
+    try:
+        page_number = int(page)
+        return jsonify({"page": page_number, "records": _read_page(page_number)})
+    except (ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.put("/api/files/<page>")
+def update_file(page: str):
+    try:
+        page_number = int(page)
+        path = _page_path(page)
+        payload = request.get_json(silent=True)
+        records = payload.get("records") if isinstance(payload, dict) else None
+        if not isinstance(records, list):
+            raise ValueError("Nội dung file phải là JSON array")
+        json.dumps(records, ensure_ascii=False)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(records, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+        return jsonify({"page": page_number, "records": len(records), "message": "Đã lưu file"})
+    except (ValueError, OSError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 @app.post("/api/export")
 def export_csv():
+    selected = request.form.getlist("files")
+    if selected:
+        try:
+            pages = sorted({int(value) for value in selected})
+            records = []
+            for page in pages:
+                records.extend((page, merge_data.flatten(item)) for item in _read_page(page))
+        except (ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+            return jsonify({"error": str(exc)}), 400
+    else:
+        records = merge_data.load_records(crawler.DATA_DIR)
     output = Path("data.csv")
-    records = merge_data.load_records(crawler.DATA_DIR)
     if not records:
         return jsonify({"error": "Chưa có dữ liệu để xuất"}), 400
     merge_data.write_csv(records, output, dedupe=True, encoding="utf-8-sig")
