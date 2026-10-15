@@ -14,6 +14,7 @@ from typing import Any
 import requests
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill
 
 import merge_data
 import tradeit_crawler as crawler
@@ -77,6 +78,62 @@ def _read_page_in_dataset(dataset: str, page: int) -> list[Any]:
     if not isinstance(payload, list):
         raise ValueError(f"File trang {page} không chứa một mảng dữ liệu")
     return payload
+
+
+def _write_xlsx(
+    records: list[tuple[int, dict[str, Any]]],
+    output: Path,
+) -> tuple[int, int]:
+    """Write flattened records to an Excel workbook while preserving text values."""
+    columns: dict[str, None] = {"_source_page": None}
+    for _, record in records:
+        for key in record:
+            columns.setdefault(key, None)
+    fieldnames = list(columns)
+
+    seen: set[str] = set()
+    written = 0
+    skipped = 0
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "buyers"
+
+    header_fill = PatternFill("solid", fgColor="0F766E")
+    header_font = Font(color="FFFFFF", bold=True)
+    for column_index, fieldname in enumerate(fieldnames, start=1):
+        cell = sheet.cell(row=1, column=column_index, value=fieldname)
+        cell.fill = header_fill
+        cell.font = header_font
+
+    for page, record in records:
+        row = dict(record)
+        row["_source_page"] = page
+        fingerprint = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+        if fingerprint in seen:
+            skipped += 1
+            continue
+        seen.add(fingerprint)
+        for column_index, fieldname in enumerate(fieldnames, start=1):
+            value = row.get(fieldname, "")
+            if value is None:
+                value = ""
+            elif not isinstance(value, str):
+                value = str(value)
+            cell = sheet.cell(row=written + 2, column=column_index, value=value)
+            cell.number_format = "@"
+        written += 1
+
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for column_cells in sheet.columns:
+        max_length = max(len(str(cell.value or "")) for cell in column_cells)
+        sheet.column_dimensions[column_cells[0].column_letter].width = min(
+            max(max_length + 2, 12), 42
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output)
+    workbook.close()
+    return written, skipped
 
 
 def _clean_name(name: str) -> str:
@@ -622,11 +679,16 @@ def export_csv():
     else:
         records = merge_data.load_records(data_dir)
 
-    output = _dataset_csv_file(dataset_name)
+    output = _dataset_dir(dataset_name) / f"{dataset_name}-buyers.xlsx"
     if not records:
         return jsonify({"error": "Chưa có dữ liệu để xuất"}), 400
-    merge_data.write_csv(records, output, dedupe=True, encoding="utf-8-sig")
-    return send_file(output, as_attachment=True, download_name=f"{dataset_name}-buyers.csv")
+    _write_xlsx(records, output)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"{dataset_name}-buyers.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.get("/health")

@@ -109,9 +109,9 @@ chỉ những file được tick mới được gộp; dùng **Chọn tất cả
 file hiện có. Nếu không chọn file nào, hệ thống không tạo bản tải xuống để tránh
 nhầm dữ liệu.
 
-CSV xuất ra đang dùng dấu `;` để phân tách cột, phù hợp với thao tác **Text to
-Columns** trong Excel. Các trường lồng nhau được đổi sang dạng `a__b` để không
-bị tách nhầm khi dùng dấu `;`.
+Web xuất trực tiếp file Excel `.xlsx`, không cần dùng **Text to Columns**. Mỗi
+trường là một cột riêng, có bộ lọc và cố định hàng tiêu đề. Các giá trị được ghi
+dạng text để hạn chế Excel tự đổi mã HS, số 0 đầu hoặc ngày tháng.
 
 ### Giao diện
 
