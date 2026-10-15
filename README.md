@@ -117,6 +117,9 @@ bị tách nhầm khi dùng dấu `.`.
 
 - Có nút đổi sáng/tối ngay trên dashboard.
 - Phần xem file đã crawl hiển thị theo bảng, sửa từng ô rồi lưu lại.
+- Có nút **Tạo bộ dữ liệu mới** riêng, không cần nhập tên dataset trong form crawl.
+- Giao diện dùng typography `DM Sans` cho nội dung và `Space Grotesk` cho tiêu đề,
+  tự responsive trên màn hình nhỏ.
 
 ### CLI
 

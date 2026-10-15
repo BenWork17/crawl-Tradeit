@@ -492,6 +492,23 @@ def datasets():
     return jsonify({"current": current, "datasets": _list_datasets()})
 
 
+@app.post("/api/datasets")
+def create_dataset():
+    payload = request.get_json(silent=True) or {}
+    raw_name = str(payload.get("name", "")).strip()
+    try:
+        dataset_name = _ensure_dataset(raw_name)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(
+        {
+            "name": dataset_name,
+            "label": _dataset_display_name(dataset_name),
+            "message": "Đã tạo bộ dữ liệu",
+        }
+    ), 201
+
+
 @app.get("/api/files")
 def list_files():
     dataset_name = request.args.get("dataset", "").strip()

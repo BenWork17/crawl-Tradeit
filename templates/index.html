@@ -4,10 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TradeIT Crawler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       color-scheme: dark;
-      font-family: Inter, system-ui, sans-serif;
+      font-family: "DM Sans", system-ui, sans-serif;
       --bg: #08111f;
       --bg2: #0d1728;
       --panel: rgba(15, 23, 42, 0.88);
@@ -49,7 +52,8 @@
       display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
       margin-bottom: 22px;
     }
-    h1 { margin: 0 0 8px; font-size: clamp(30px, 4vw, 46px); letter-spacing: -0.03em; }
+    h1, h2, h3, button, .link-button, .pill, .stat .value { font-family: "Space Grotesk", "DM Sans", sans-serif; }
+    h1 { margin: 0 0 8px; font-size: clamp(30px, 4vw, 46px); letter-spacing: -0.04em; }
     .muted { color: var(--muted); }
     .pill-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
     .pill {
@@ -130,7 +134,19 @@
     }
     .helper { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 8px; }
     .mini { font-size: 12px; color: #8ca3bf; }
-    .dataset-bar { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+    .dataset-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+    .dataset-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    .dataset-create {
+      min-width: 150px; height: 46px; margin-top: 14px;
+      background: linear-gradient(135deg, var(--accent-2), #ec4899);
+    }
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+      padding: 20px; background: rgba(2, 6, 23, 0.72); backdrop-filter: blur(8px);
+    }
+    .modal { width: min(460px, 100%); padding: 24px; border: 1px solid var(--panel-border); border-radius: 20px; background: var(--panel); box-shadow: 0 24px 80px rgba(2, 6, 23, .5); }
+    .modal h2 { margin: 0 0 8px; }
+    .modal[hidden], .modal-backdrop[hidden] { display: none; }
     .files { margin-top: 20px; }
     .file-list { max-height: 300px; overflow: auto; display: grid; gap: 8px; margin-top: 12px; }
     .file-row {
@@ -208,15 +224,15 @@
 
         <div class="dataset-bar">
           <div>
-            <label>Chọn bộ dữ liệu đã có</label>
-            <select id="dataset_select"></select>
-          </div>
-          <div>
-            <label>Hoặc nhập tên mới</label>
-            <input id="dataset_name" name="dataset_name" type="text" value="{{ job.dataset_name }}" placeholder="VD: importer_hscode">
+            <label>Bộ dữ liệu đang chọn</label>
+            <div class="dataset-picker">
+              <select id="dataset_select"></select>
+              <input id="dataset_name" name="dataset_name" type="hidden" value="{{ job.dataset_name }}">
+              <button type="button" class="dataset-create" onclick="openDatasetModal()">+ Tạo bộ mới</button>
+            </div>
           </div>
         </div>
-        <p class="note" style="margin-top: 8px;">Nếu đổi <code>Importer</code> hoặc <code>HS Code</code>, hãy chọn/tạo bộ dữ liệu mới để CSV không bị trộn.</p>
+        <p class="note" style="margin-top: 8px;">Mỗi bộ dữ liệu có thư mục JSON và CSV riêng. Khi đổi <code>Importer</code> hoặc <code>HS Code</code>, hãy tạo bộ mới.</p>
 
         <form method="post" action="/api/jobs" enctype="multipart/form-data" onsubmit="return confirmStart()">
           <input type="hidden" id="form_dataset_name" name="dataset_name" value="{{ job.dataset_name }}">
@@ -308,6 +324,19 @@
     </aside>
   </div>
 </main>
+<div id="dataset-modal" class="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dataset-modal-title">
+    <h2 id="dataset-modal-title">Tạo bộ dữ liệu mới</h2>
+    <p class="note">Đặt tên dễ nhận biết, ví dụ <code>netherland_090411</code> hoặc <code>germany_080510</code>.</p>
+    <label for="new-dataset-name">Tên bộ dữ liệu</label>
+    <input id="new-dataset-name" type="text" maxlength="80" placeholder="VD: importer_hscode">
+    <p id="dataset-create-message" class="note"></p>
+    <div class="actions">
+      <button type="button" onclick="createDataset()">Tạo bộ dữ liệu</button>
+      <button type="button" class="secondary" onclick="closeDatasetModal()">Hủy</button>
+    </div>
+  </div>
+</div>
 
 <script>
   let editingDataset = '';
@@ -357,6 +386,41 @@
     const datasetInput = document.getElementById('dataset_name');
     const formDataset = document.getElementById('form_dataset_name');
     formDataset.value = datasetInput.value.trim() || 'legacy';
+  }
+
+  function openDatasetModal() {
+    document.getElementById('dataset-create-message').textContent = '';
+    document.getElementById('new-dataset-name').value = '';
+    document.getElementById('dataset-modal').hidden = false;
+    document.getElementById('new-dataset-name').focus();
+  }
+
+  function closeDatasetModal() {
+    document.getElementById('dataset-modal').hidden = true;
+  }
+
+  async function createDataset() {
+    const name = document.getElementById('new-dataset-name').value.trim();
+    const message = document.getElementById('dataset-create-message');
+    if (!name) {
+      message.textContent = 'Vui lòng nhập tên bộ dữ liệu.';
+      return;
+    }
+    const response = await fetch('/api/datasets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      message.textContent = data.error || 'Không tạo được bộ dữ liệu.';
+      return;
+    }
+    closeDatasetModal();
+    await loadDatasets();
+    document.getElementById('dataset_name').value = data.name;
+    document.getElementById('dataset_select').value = data.name;
+    await loadFiles();
   }
 
   function selectAllFiles(selected) {
@@ -576,8 +640,6 @@
       await loadFiles();
     });
     datasetInput.addEventListener('change', async function() {
-      const match = [...datasetSelect.options].some(option => option.value === datasetInput.value.trim());
-      datasetSelect.value = match ? datasetInput.value.trim() : '__custom__';
       await loadFiles();
     });
   }
