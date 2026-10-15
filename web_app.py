@@ -1,19 +1,16 @@
-"""Small web dashboard for running the TradeIT crawler.
-
-The cookie is kept in memory for the lifetime of a job and is never rendered
-back to the browser or written to disk by this module.
-"""
+"""Small web dashboard for running the TradeIT crawler."""
 
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 import requests
+from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 
 import merge_data
 import tradeit_crawler as crawler
@@ -27,13 +24,15 @@ job: dict[str, Any] = {
     "page": 0,
     "records": 0,
     "total": None,
+    "account_index": 0,
+    "account_total": 0,
+    "account_label": "",
     "started_at": None,
 }
 stop_event = threading.Event()
 
 
 def _page_path(raw_page: str) -> Path:
-    """Resolve a page number to a data file without allowing path traversal."""
     try:
         page = int(raw_page)
     except (TypeError, ValueError) as exc:
@@ -53,15 +52,71 @@ def _read_page(page: int) -> list[Any]:
     return payload
 
 
-def _cookie_from_form() -> str:
-    token = request.form.get("token", "").strip()
-    refresh = request.form.get("refresh_token", "").strip()
-    parts = []
-    if token:
-        parts.append(f"{crawler.CRM_TOKEN_NAME}={token}")
-    if refresh:
-        parts.append(f"{crawler.CRM_RF_TOKEN_NAME}={refresh}")
-    return "; ".join(parts)
+def _fingerprint(item: Any) -> str:
+    if isinstance(item, dict):
+        normalized = merge_data.flatten(item)
+    else:
+        normalized = {"value": item}
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+
+
+def _load_seen_fingerprints() -> set[str]:
+    seen: set[str] = set()
+    if not crawler.DATA_DIR.is_dir():
+        return seen
+    for path in crawler.DATA_DIR.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, list):
+            continue
+        for item in payload:
+            seen.add(_fingerprint(item))
+    return seen
+
+
+def _dedupe_items(items: list[Any], seen: set[str]) -> tuple[list[Any], int]:
+    unique: list[Any] = []
+    skipped = 0
+    for item in items:
+        key = _fingerprint(item)
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique, skipped
+
+
+def _parse_accounts(raw: str) -> list[dict[str, str]]:
+    """Parse multiline accounts. Each line can be token|refresh or token,refresh."""
+    accounts: list[dict[str, str]] = []
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        token = ""
+        refresh = ""
+        if "rf_token=" in text or "_TaaS.auth.crm.rf_token=" in text:
+            token_match = re.search(
+                r"(?:_TaaS\.auth\.crm\.token|token)\s*=\s*([^;|,\t]+)", text, re.I
+            )
+            refresh_match = re.search(
+                r"(?:_TaaS\.auth\.crm\.rf_token|rf_token)\s*=\s*([^;|,\t]+)",
+                text,
+                re.I,
+            )
+            if token_match and refresh_match:
+                token = token_match.group(1).strip()
+                refresh = refresh_match.group(1).strip()
+        else:
+            parts = [part.strip() for part in re.split(r"[\t,|]", text) if part.strip()]
+            if len(parts) >= 2:
+                token, refresh = parts[0], parts[1]
+        if token and refresh:
+            accounts.append({"token": token, "refresh_token": refresh})
+    return accounts
 
 
 def _update(**values: Any) -> None:
@@ -70,86 +125,130 @@ def _update(**values: Any) -> None:
 
 
 def _run(options: dict[str, Any]) -> None:
-    cookie = options["cookie"]
     page = options["start_page"]
-    records = 0
     total: int | None = None
-    session = requests.Session()
+    seen: set[str] = options["seen"]
+    accounts: list[dict[str, str]] = options["accounts"]
     body = {"importer": options["importer"], "hsCode": options["hs_code"]}
-    try:
-        if not options["force"]:
-            saved_state = crawler.load_state()
-            if saved_state:
-                total = saved_state.get("total")
-            if crawler.DATA_DIR.is_dir():
-                for page_file in crawler.DATA_DIR.glob("*.json"):
-                    try:
-                        existing_page = int(page_file.stem)
-                    except ValueError:
-                        continue
-                    records += crawler.count_records_in_file(existing_page)
-        crawler.log_cookie_used(cookie)
-        _update(
-            status="running",
-            message=f"Đang tìm trang tiếp theo từ trang {page}",
-            page=page,
-            records=records,
-            total=total,
-        )
-        while not stop_event.is_set():
-            if options["end_page"] is not None and page > options["end_page"]:
-                break
-            if not options["force"] and crawler.page_file_path(page).exists():
-                existing = crawler.count_records_in_file(page)
-                _update(
-                    page=page,
-                    records=records,
-                    message=f"Bỏ qua trang {page} đã có dữ liệu; đang tìm trang tiếp theo",
-                )
-                if existing < options["per_page"]:
-                    break
-                page += 1
-                continue
 
-            payload = crawler.fetch_page(session, cookie, page, options["per_page"], body)
-            data = payload.get("data") or {}
-            items = data.get("items")
-            if not isinstance(items, list):
-                raise RuntimeError(f"API không trả về data.items ở trang {page}")
-            row_count = data.get("rowCount", len(items))
-            if isinstance(data.get("total"), int):
-                total = data["total"]
-            crawler.save_page(items, page, options["force"])
-            records += len(items)
-            crawler.save_state(page, total, records)
-            _update(
-                page=page,
-                records=records,
-                total=total,
-                message=f"Đã lưu trang {page} ({len(items)} bản ghi)",
+    if not options["force"]:
+        saved_state = crawler.load_state()
+        if saved_state:
+            total = saved_state.get("total")
+
+    _update(
+        status="running",
+        message="Đang chuẩn bị crawl",
+        page=page,
+        records=len(seen),
+        total=total,
+        account_index=0,
+        account_total=len(accounts),
+        account_label="",
+    )
+
+    try:
+        if not accounts:
+            raise ValueError("Chưa có tài khoản hợp lệ")
+
+        for account_index, account in enumerate(accounts, start=1):
+            if stop_event.is_set():
+                break
+
+            cookie = (
+                f"{crawler.CRM_TOKEN_NAME}={account['token']}; "
+                f"{crawler.CRM_RF_TOKEN_NAME}={account['refresh_token']}"
             )
-            if isinstance(row_count, int) and row_count < options["per_page"]:
-                break
-            if total is not None and records >= total:
-                break
-            page += 1
-            stop_event.wait(options["delay"])
+            crawler.log_cookie_used(cookie)
+
+            _update(
+                account_index=account_index,
+                account_total=len(accounts),
+                account_label=f"Acc {account_index}/{len(accounts)}",
+                page=page,
+                records=len(seen),
+                total=total,
+                message=f"Đang crawl {account_index}/{len(accounts)} từ trang {page}",
+            )
+
+            session = requests.Session()
+            try:
+                while not stop_event.is_set():
+                    if options["end_page"] is not None and page > options["end_page"]:
+                        break
+
+                    if not options["force"] and crawler.page_file_path(page).exists():
+                        _update(
+                            page=page,
+                            records=len(seen),
+                            message=(
+                                f"Bỏ qua trang {page} đã có dữ liệu; "
+                                f"tiếp tục {account_index}/{len(accounts)}"
+                            ),
+                        )
+                        page += 1
+                        continue
+
+                    payload = fetch_page(session, cookie, page, options["per_page"], body)
+                    data = payload.get("data") or {}
+                    items = data.get("items")
+                    if not isinstance(items, list):
+                        raise RuntimeError(f"API không trả về data.items ở trang {page}")
+
+                    row_count = data.get("rowCount", len(items))
+                    if isinstance(data.get("total"), int):
+                        total = data["total"]
+
+                    unique_items, _skipped = _dedupe_items(items, seen)
+                    crawler.save_page(unique_items, page, options["force"])
+
+                    _update(
+                        page=page,
+                        records=len(seen),
+                        total=total,
+                        message=(
+                            f"Tài khoản {account_index}/{len(accounts)}: "
+                            f"trang {page} đã lưu {len(unique_items)} bản ghi mới"
+                        ),
+                    )
+                    crawler.save_state(page, total, len(seen))
+
+                    if isinstance(row_count, int) and row_count < options["per_page"]:
+                        page += 1
+                        break
+                    if total is not None and len(seen) >= total:
+                        page += 1
+                        break
+
+                    page += 1
+                    stop_event.wait(options["delay"])
+            except (crawler.AuthError, crawler.CreditError) as exc:
+                if account_index >= len(accounts):
+                    raise
+                _update(
+                    message=(
+                        f"Tài khoản {account_index}/{len(accounts)} dừng ở trang {page}: "
+                        f"{exc}. Chuyển sang tài khoản kế tiếp."
+                    ),
+                    records=len(seen),
+                    total=total,
+                )
+            finally:
+                session.close()
+
         if stop_event.is_set():
-            _update(status="stopped", message="Đã dừng theo yêu cầu")
+            _update(status="stopped", message="Đã dừng theo yêu cầu", records=len(seen))
         else:
-            _update(status="completed", message=f"Hoàn tất: {records} bản ghi")
+            _update(status="completed", message=f"Hoàn tất: {len(seen)} bản ghi", records=len(seen))
     except (crawler.AuthError, crawler.CreditError) as exc:
         _update(
             status="error",
-            message=f"Cookie hoặc credit không hợp lệ ở trang {page}: {exc}. "
-            f"Dữ liệu cũ vẫn được giữ nguyên.",
-            records=records,
+            message=f"Không crawl được tài khoản cuối ở trang {page}: {exc}.",
+            records=len(seen),
             total=total,
         )
     except (requests.RequestException, RuntimeError, OSError, ValueError) as exc:
         _update(status="error", message=str(exc))
-    finally:
-        session.close()
 
 
 @app.get("/")
@@ -164,9 +263,12 @@ def start_job():
     with job_lock:
         if job["status"] == "running":
             return jsonify({"error": "Đang có một job chạy"}), 409
-    cookie = _cookie_from_form()
-    if not cookie:
-        return jsonify({"error": "Vui lòng nhập cookie"}), 400
+
+    raw_accounts = request.form.get("accounts", "")
+    accounts = _parse_accounts(raw_accounts)
+    if not accounts:
+        return jsonify({"error": "Vui lòng nhập danh sách tài khoản hợp lệ"}), 400
+
     try:
         start_page = max(1, int(request.form.get("start_page", "1")))
         end_raw = request.form.get("end_page", "").strip()
@@ -175,11 +277,12 @@ def start_job():
         delay = max(0.0, float(request.form.get("delay", "1.5")))
     except ValueError:
         return jsonify({"error": "Thông số trang, số bản ghi hoặc delay không hợp lệ"}), 400
+
     if end_page is not None and end_page < start_page:
         return jsonify({"error": "Trang kết thúc phải lớn hơn hoặc bằng trang bắt đầu"}), 400
 
+    seen = _load_seen_fingerprints()
     options = {
-        "cookie": cookie,
         "start_page": start_page,
         "end_page": end_page,
         "per_page": per_page,
@@ -187,17 +290,24 @@ def start_job():
         "force": request.form.get("force") == "on",
         "importer": request.form.get("importer", "netherland").strip() or "netherland",
         "hs_code": request.form.get("hs_code", "090411").strip() or "090411",
+        "accounts": accounts,
+        "seen": seen,
     }
+
     stop_event.clear()
     with job_lock:
         job.update(
             status="running",
             message="Đang khởi động",
             page=start_page,
-            records=0,
+            records=len(seen),
             total=None,
+            account_index=0,
+            account_total=len(accounts),
+            account_label="",
             started_at=time.time(),
         )
+
     threading.Thread(target=_run, args=(options,), daemon=True).start()
     return redirect(url_for("index"))
 
@@ -260,10 +370,7 @@ def update_file(page: str):
             raise ValueError("Nội dung file phải là JSON array")
         json.dumps(records, ensure_ascii=False)
         temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(records, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        temporary.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
         return jsonify({"page": page_number, "records": len(records), "message": "Đã lưu file"})
     except (ValueError, OSError, TypeError) as exc:
@@ -283,6 +390,7 @@ def export_csv():
             return jsonify({"error": str(exc)}), 400
     else:
         records = merge_data.load_records(crawler.DATA_DIR)
+
     output = Path("data.csv")
     if not records:
         return jsonify({"error": "Chưa có dữ liệu để xuất"}), 400

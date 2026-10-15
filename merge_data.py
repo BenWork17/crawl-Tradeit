@@ -45,12 +45,12 @@ def page_number(path: Path) -> int:
 
 
 def flatten(obj: Any, parent: str = "", out: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """Flatten a nested dict into dotted keys; join scalar lists with `` | ``."""
+    """Flatten a nested dict into safe keys; join scalar lists with `` | ``."""
     if out is None:
         out = {}
     if isinstance(obj, dict):
         for key, value in obj.items():
-            name = f"{parent}.{key}" if parent else str(key)
+            name = f"{parent}__{key}" if parent else str(key)
             flatten(value, name, out)
     elif isinstance(obj, (list, tuple)):
         if all(not isinstance(x, (dict, list, tuple)) for x in obj):
@@ -110,7 +110,7 @@ def write_csv(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding=encoding, newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames, restval="")
+        writer = csv.DictWriter(fh, fieldnames=fieldnames, restval="", delimiter=".")
         writer.writeheader()
         for page, record in records:
             row = dict(record)

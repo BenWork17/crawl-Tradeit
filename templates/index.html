@@ -33,10 +33,10 @@
   <div class="grid">
     <section class="card">
       <form method="post" action="/api/jobs" onsubmit="return confirmStart()">
-        <div class="row">
-          <div><label>Token</label><input name="token" type="password" autocomplete="off" required></div>
-          <div><label>Refresh token</label><input name="refresh_token" type="password" autocomplete="off" required></div>
-        </div>
+        <label>Danh sách tài khoản</label>
+        <textarea name="accounts" rows="8" spellcheck="false" placeholder="_TaaS.auth.crm.token=aaa | _TaaS.auth.crm.rf_token=bbb
+_TaaS.auth.crm.token=ccc | _TaaS.auth.crm.rf_token=ddd
+# mỗi dòng một tài khoản, chấp nhận token|refresh hoặc token,refresh"></textarea>
         <div class="row">
           <div><label>Importer</label><input name="importer" value="netherland"></div>
           <div><label>HS Code</label><input name="hs_code" value="090411"></div>
@@ -53,12 +53,14 @@
         <button type="submit">Bắt đầu crawl</button>
         <button class="secondary" type="submit" formaction="/api/jobs/stop">Dừng</button>
       </form>
-      <p class="note">Nhập riêng hai giá trị token. Cookie chỉ được giữ trong bộ nhớ khi job đang chạy, không hiển thị lại và không lưu vào file.</p>
+      <p class="note">Mỗi dòng là một tài khoản. Chấp nhận định dạng <code>token|refresh</code> hoặc <code>token,refresh</code>.</p>
     </section>
     <aside class="card">
       <div class="muted">Trạng thái</div><div id="status" class="stat status">{{ job.status }}</div>
       <div class="muted">Trang đang xử lý / tiếp theo</div><div id="page" class="stat">{{ job.page }}</div>
       <div class="muted">Đã xử lý</div><div id="records" class="stat">{{ job.records }}</div>
+      <div class="muted">Tài khoản hiện tại</div><div id="account_label" class="stat">{{ job.account_label }}</div>
+      <div class="muted">Tiến độ tài khoản</div><div id="account_index" class="stat">{{ job.account_index }}/{{ job.account_total }}</div>
       <p id="message" class="note">{{ job.message }}</p>
       <button id="export-button" type="button" onclick="exportSelected()">Tải các file đã chọn</button>
     </aside>
@@ -86,7 +88,8 @@
   let editingPage = null;
   async function refresh() {
     const data = await fetch('/api/status').then(r => r.json());
-    for (const key of ['status', 'page', 'records', 'message']) document.getElementById(key).textContent = data[key] ?? '-';
+    for (const key of ['status', 'page', 'records', 'message', 'account_label']) document.getElementById(key).textContent = data[key] ?? '-';
+    document.getElementById('account_index').textContent = `${data.account_index ?? 0}/${data.account_total ?? 0}`;
   }
   async function loadFiles() {
     const response = await fetch('/api/files');

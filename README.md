@@ -76,6 +76,19 @@ python web_app.py
 Sau đó mở `http://localhost:5000`. `gunicorn` chỉ dành cho môi trường Linux
 trên hosting hoặc trong Docker.
 
+### Nhập nhiều tài khoản
+
+Ô **Danh sách tài khoản** nhận nhiều dòng, mỗi dòng là một acc:
+
+```text
+token|refresh_token
+token,refresh_token
+_TaaS.auth.crm.token=... |_TaaS.auth.crm.rf_token=...
+```
+
+Web sẽ crawl tuần tự từng account, tự bỏ qua record đã có trong các file cũ và
+gộp kết quả cuối cùng thành một CSV duy nhất.
+
 Ứng dụng chỉ chạy một job tại một thời điểm. Cookie không được ghi ra file;
 không nên bật debug hoặc chia sẻ URL dashboard công khai nếu chưa thêm lớp đăng nhập.
 Các file `data/`, `state.json` và CSV trên hosting miễn phí có thể mất khi
@@ -88,6 +101,10 @@ bấm **Xem / sửa**, chỉnh JSON dạng mảng rồi bấm **Lưu thay đổi
 chỉ những file được tick mới được gộp; dùng **Chọn tất cả** nếu muốn gộp toàn bộ
 file hiện có. Nếu không chọn file nào, hệ thống không tạo bản tải xuống để tránh
 nhầm dữ liệu.
+
+CSV xuất ra đang dùng dấu `.` để phân tách cột, phù hợp với thao tác **Text to
+Columns** trong Excel. Các trường lồng nhau được đổi sang dạng `a__b` để không
+bị tách nhầm khi dùng dấu `.`.
 
 ### CLI
 
