@@ -5,87 +5,221 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TradeIT Crawler</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
-    body { margin: 0; background: #0f172a; color: #e2e8f0; }
-    main { max-width: 980px; margin: 0 auto; padding: 40px 20px; }
-    h1 { margin: 0 0 8px; font-size: 32px; } .muted { color: #94a3b8; }
-    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 20px; margin-top: 28px; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 22px; }
+    :root {
+      color-scheme: dark;
+      font-family: Inter, system-ui, sans-serif;
+      --bg: #08111f;
+      --panel: rgba(15, 23, 42, 0.86);
+      --panel-border: rgba(148, 163, 184, 0.18);
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-2: #a855f7;
+      --ok: #34d399;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 32%),
+        radial-gradient(circle at top right, rgba(168, 85, 247, 0.14), transparent 28%),
+        linear-gradient(180deg, #0b1220 0%, #08111f 100%);
+    }
+    main { max-width: 1240px; margin: 0 auto; padding: 28px 20px 40px; }
+    .hero {
+      display: flex; justify-content: space-between; gap: 16px; align-items: end;
+      margin-bottom: 22px;
+    }
+    h1 { margin: 0 0 8px; font-size: clamp(30px, 4vw, 44px); letter-spacing: -0.03em; }
+    .muted { color: var(--muted); }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .pill {
+      padding: 7px 12px; border: 1px solid var(--panel-border); border-radius: 999px;
+      background: rgba(15, 23, 42, 0.55); color: #cbd5e1; font-size: 13px;
+    }
+    .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; }
+    .stack { display: grid; gap: 20px; }
+    .card {
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 16px 50px rgba(2, 6, 23, 0.32);
+    }
+    .card h2 { margin: 0 0 10px; font-size: 18px; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     label { display: block; margin: 14px 0 6px; color: #cbd5e1; font-size: 14px; }
-    input { box-sizing: border-box; width: 100%; padding: 11px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; }
+    input[type="text"], input[type="number"], input[type="file"], textarea {
+      width: 100%;
+      padding: 12px 13px;
+      border-radius: 12px;
+      border: 1px solid #334155;
+      background: rgba(2, 6, 23, 0.72);
+      color: white;
+    }
+    input[type="file"] { padding: 10px; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    button { margin-top: 20px; padding: 11px 16px; border: 0; border-radius: 8px; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; }
-    button.secondary { background: #475569; color: white; margin-left: 8px; }
-    .stat { font-size: 27px; font-weight: 700; margin: 7px 0 18px; } .status { color: #38bdf8; }
-    .note { font-size: 13px; line-height: 1.5; color: #94a3b8; }
-    .files { margin-top: 20px; } .file-list { max-height: 260px; overflow: auto; }
-    .file-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #334155; }
-    .file-row input { width: auto; } .file-row button { margin: 0 0 0 auto; padding: 7px 10px; }
-    textarea { box-sizing: border-box; width: 100%; min-height: 300px; padding: 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; font: 13px monospace; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+    button, .link-button {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 11px 16px; border: 0; border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent), #60a5fa);
+      color: #082f49; font-weight: 800; cursor: pointer; text-decoration: none;
+    }
+    button.secondary, .link-button.secondary { background: rgba(71, 85, 105, 0.95); color: white; }
+    button.ghost, .link-button.ghost { background: transparent; color: #cbd5e1; border: 1px solid #334155; }
+    .stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .stat {
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      padding: 14px;
+      background: rgba(15, 23, 42, 0.55);
+    }
+    .stat .label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+    .stat .value { font-size: 24px; font-weight: 800; line-height: 1.1; }
+    .status { color: var(--accent); }
+    .note { font-size: 13px; line-height: 1.55; color: var(--muted); }
+    .files { margin-top: 20px; }
+    .file-list { max-height: 300px; overflow: auto; display: grid; gap: 8px; }
+    .file-row {
+      display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center;
+      padding: 12px 0; border-bottom: 1px solid rgba(51, 65, 85, 0.8);
+    }
+    .file-row input { width: auto; transform: scale(1.05); }
+    .file-row button { margin: 0; padding: 8px 11px; }
+    textarea.editor {
+      box-sizing: border-box; width: 100%; min-height: 300px; resize: vertical;
+      padding: 12px; border-radius: 12px; border: 1px solid #334155;
+      background: rgba(2, 6, 23, 0.72); color: white; font: 13px monospace;
+    }
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; } .toolbar button { margin-top: 10px; }
-    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .upload-box {
+      border: 1px dashed rgba(56, 189, 248, 0.35);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(8, 17, 31, 0.35);
+    }
+    .helper { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 8px; }
+    .mini { font-size: 12px; color: #8ca3bf; }
+    @media (max-width: 920px) {
+      .grid { grid-template-columns: 1fr; }
+      .row, .stat-grid { grid-template-columns: 1fr; }
+      .hero { align-items: start; flex-direction: column; }
+    }
   </style>
 </head>
 <body>
 <main>
-  <h1>TradeIT Crawler</h1>
-  <div class="muted">Giao diện chạy crawl và xuất danh sách buyer</div>
+  <div class="hero">
+    <div>
+      <h1>TradeIT Crawler Control Center</h1>
+      <div class="muted">Upload Excel danh sách acc, crawl tuần tự, xem/sửa file và export CSV dấu chấm.</div>
+      <div class="pill-row">
+        <span class="pill">Multi-account</span>
+        <span class="pill">Auto dedupe</span>
+        <span class="pill">Excel upload</span>
+        <span class="pill">CSV delimiter: .</span>
+      </div>
+    </div>
+    <a class="link-button ghost" href="/download-template">Tải template Excel</a>
+  </div>
+
   <div class="grid">
-    <section class="card">
-      <form method="post" action="/api/jobs" onsubmit="return confirmStart()">
-        <label>Danh sách tài khoản</label>
-        <textarea name="accounts" rows="8" spellcheck="false" placeholder="_TaaS.auth.crm.token=aaa | _TaaS.auth.crm.rf_token=bbb
-_TaaS.auth.crm.token=ccc | _TaaS.auth.crm.rf_token=ddd
-# mỗi dòng một tài khoản, chấp nhận token|refresh hoặc token,refresh"></textarea>
-        <div class="row">
-          <div><label>Importer</label><input name="importer" value="netherland"></div>
-          <div><label>HS Code</label><input name="hs_code" value="090411"></div>
+    <section class="stack">
+      <div class="card">
+        <div class="section-title">
+          <div>
+            <h2>1) Nạp file Excel tài khoản</h2>
+            <div class="note">Sheet đầu tiên, 2 cột: <code>token</code> và <code>refresh_token</code>.</div>
+          </div>
+          <span class="pill">.xlsx / .xlsm / .xltx / .xltm</span>
         </div>
-        <div class="row">
-          <div><label>Trang bắt đầu</label><input name="start_page" type="number" min="1" value="1"></div>
-          <div><label>Trang kết thúc (tuỳ chọn)</label><input name="end_page" type="number" min="1"></div>
+        <form method="post" action="/api/jobs" enctype="multipart/form-data" onsubmit="return confirmStart()">
+          <div class="upload-box">
+            <label>File Excel danh sách tài khoản</label>
+            <input id="accounts_file" name="accounts_file" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" required>
+            <div class="helper">
+              <div class="mini" id="file-name">Chưa chọn file</div>
+              <a class="link-button secondary" href="/download-template">Mẫu Excel</a>
+            </div>
+          </div>
+          <div class="row">
+            <div><label>Importer</label><input name="importer" value="netherland"></div>
+            <div><label>HS Code</label><input name="hs_code" value="090411"></div>
+          </div>
+          <div class="row">
+            <div><label>Trang bắt đầu</label><input name="start_page" type="number" min="1" value="1"></div>
+            <div><label>Trang kết thúc (tuỳ chọn)</label><input name="end_page" type="number" min="1"></div>
+          </div>
+          <div class="row">
+            <div><label>Số bản ghi/trang</label><input name="per_page" type="number" min="1" max="50" value="50"></div>
+            <div><label>Delay (giây)</label><input name="delay" type="number" min="0" step="0.1" value="1.5"></div>
+          </div>
+          <label><input name="force" type="checkbox" style="width:auto"> Crawl lại và ghi đè trang đã có</label>
+          <div class="actions">
+            <button type="submit">Bắt đầu crawl</button>
+            <button class="secondary" type="submit" formaction="/api/jobs/stop" formnovalidate>Dừng</button>
+          </div>
+        </form>
+        <p class="note">Excel không cần nhập tay; chỉ cần 2 cột token / refresh token. Nếu file có header, web sẽ tự nhận.</p>
+      </div>
+
+      <div class="card">
+        <div class="section-title">
+          <div>
+            <h2>2) File đã crawl</h2>
+            <div class="note">Xem, sửa và chọn những trang muốn gộp trước khi tải CSV.</div>
+          </div>
+          <div class="toolbar">
+            <button type="button" onclick="selectAllFiles(true)">Chọn tất cả</button>
+            <button class="secondary" type="button" onclick="selectAllFiles(false)">Bỏ chọn</button>
+          </div>
         </div>
-        <div class="row">
-          <div><label>Số bản ghi/trang</label><input name="per_page" type="number" min="1" max="50" value="50"></div>
-          <div><label Delay (giây)</label><input name="delay" type="number" min="0" step="0.1" value="1.5"></div>
+        <div id="file-list" class="file-list">Đang tải danh sách...</div>
+        <div id="editor" hidden>
+          <h3 id="editor-title"></h3>
+          <textarea class="editor" id="editor-content" spellcheck="false"></textarea>
+          <div class="toolbar">
+            <button type="button" onclick="saveFile()">Lưu thay đổi</button>
+            <button class="secondary" type="button" onclick="closeEditor()">Đóng</button>
+          </div>
+          <p id="editor-message" class="note"></p>
         </div>
-        <label><input name="force" type="checkbox" style="width:auto"> Crawl lại và ghi đè trang đã có</label>
-        <button type="submit">Bắt đầu crawl</button>
-        <button class="secondary" type="submit" formaction="/api/jobs/stop">Dừng</button>
-      </form>
-      <p class="note">Mỗi dòng là một tài khoản. Chấp nhận định dạng <code>token|refresh</code> hoặc <code>token,refresh</code>.</p>
+      </div>
     </section>
-    <aside class="card">
-      <div class="muted">Trạng thái</div><div id="status" class="stat status">{{ job.status }}</div>
-      <div class="muted">Trang đang xử lý / tiếp theo</div><div id="page" class="stat">{{ job.page }}</div>
-      <div class="muted">Đã xử lý</div><div id="records" class="stat">{{ job.records }}</div>
-      <div class="muted">Tài khoản hiện tại</div><div id="account_label" class="stat">{{ job.account_label }}</div>
-      <div class="muted">Tiến độ tài khoản</div><div id="account_index" class="stat">{{ job.account_index }}/{{ job.account_total }}</div>
-      <p id="message" class="note">{{ job.message }}</p>
-      <button id="export-button" type="button" onclick="exportSelected()">Tải các file đã chọn</button>
+
+    <aside class="stack">
+      <div class="card">
+        <div class="section-title">
+          <div>
+            <h2>3) Trạng thái chạy</h2>
+            <div class="note">Theo dõi acc hiện tại, trang hiện tại và số record mới.</div>
+          </div>
+          <span class="pill" id="status">{{ job.status }}</span>
+        </div>
+        <div class="stat-grid" style="margin-top: 14px;">
+          <div class="stat"><div class="label">Trang</div><div id="page" class="value">{{ job.page }}</div></div>
+          <div class="stat"><div class="label">Records</div><div id="records" class="value">{{ job.records }}</div></div>
+          <div class="stat"><div class="label">Tài khoản</div><div id="account_index" class="value">{{ job.account_index }}/{{ job.account_total }}</div></div>
+          <div class="stat"><div class="label">Acc hiện tại</div><div id="account_label" class="value">{{ job.account_label }}</div></div>
+        </div>
+        <p id="message" class="note" style="margin-top: 14px;">{{ job.message }}</p>
+        <div class="actions">
+          <button id="export-button" type="button" onclick="exportSelected()">Tải các file đã chọn</button>
+        </div>
+      </div>
     </aside>
   </div>
-  <section class="card files">
-    <h2>File đã crawl</h2>
-    <p class="note">Chọn các trang muốn gộp. Bấm “Xem / sửa” để xem hoặc chỉnh JSON rồi lưu lại.</p>
-    <div class="toolbar">
-      <button type="button" onclick="selectAllFiles(true)">Chọn tất cả</button>
-      <button class="secondary" type="button" onclick="selectAllFiles(false)">Bỏ chọn</button>
-    </div>
-    <div id="file-list" class="file-list">Đang tải danh sách...</div>
-    <div id="editor" hidden>
-      <h3 id="editor-title"></h3>
-      <textarea id="editor-content" spellcheck="false"></textarea>
-      <div class="toolbar">
-        <button type="button" onclick="saveFile()">Lưu thay đổi</button>
-        <button class="secondary" type="button" onclick="closeEditor()">Đóng</button>
-      </div>
-      <p id="editor-message" class="note"></p>
-    </div>
-  </section>
 </main>
 <script>
   let editingPage = null;
+  const accountsFile = document.getElementById('accounts_file');
+  const fileName = document.getElementById('file-name');
+  accountsFile.addEventListener('change', function() {
+    fileName.textContent = accountsFile.files.length ? accountsFile.files[0].name : 'Chưa chọn file';
+  });
   async function refresh() {
     const data = await fetch('/api/status').then(r => r.json());
     for (const key of ['status', 'page', 'records', 'message', 'account_label']) document.getElementById(key).textContent = data[key] ?? '-';

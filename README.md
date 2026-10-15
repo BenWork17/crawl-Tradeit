@@ -54,7 +54,8 @@ python tradeit_crawler.py --force
 
 ## Chạy giao diện web
 
-Giao diện web cho phép nhập cookie, bắt đầu/dừng một job crawl và tải CSV:
+Giao diện web cho phép upload Excel danh sách tài khoản, bắt đầu/dừng job crawl,
+xem/sửa file đã crawl và tải CSV:
 
 ```bash
 python -m pip install -r requirements.txt
@@ -64,8 +65,6 @@ python web_app.py
 Mở `http://localhost:5000`. Khi triển khai Render/Railway, dùng lệnh
 `gunicorn --bind 0.0.0.0:$PORT web_app:app` (đã có sẵn trong `Procfile`).
 Có thể dùng `Dockerfile` để triển khai trên bất kỳ nền tảng container nào.
-Trên giao diện web, nhập token và refresh token ở hai ô riêng để tránh nhầm
-cookie cũ.
 
 Trên Windows local, không chạy lệnh `gunicorn` trong PowerShell. Hãy dùng:
 
@@ -76,15 +75,16 @@ python web_app.py
 Sau đó mở `http://localhost:5000`. `gunicorn` chỉ dành cho môi trường Linux
 trên hosting hoặc trong Docker.
 
-### Nhập nhiều tài khoản
+### Upload danh sách tài khoản
 
-Ô **Danh sách tài khoản** nhận nhiều dòng, mỗi dòng là một acc:
+Chuẩn bị một file Excel với sheet đầu tiên gồm 2 cột:
 
-```text
-token|refresh_token
-token,refresh_token
-_TaaS.auth.crm.token=... |_TaaS.auth.crm.rf_token=...
-```
+| token | refresh_token |
+|---|---|
+| ... | ... |
+
+Nếu file có hàng tiêu đề, web sẽ tự nhận. Nên dùng nút **Tải template Excel** để
+lấy mẫu sẵn.
 
 Web sẽ crawl tuần tự từng account, tự bỏ qua record đã có trong các file cũ và
 gộp kết quả cuối cùng thành một CSV duy nhất.

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import requests
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
+from openpyxl import Workbook, load_workbook
 
 import merge_data
 import tradeit_crawler as crawler
@@ -30,6 +31,7 @@ job: dict[str, Any] = {
     "started_at": None,
 }
 stop_event = threading.Event()
+ALLOWED_ACCOUNT_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 
 
 def _page_path(raw_page: str) -> Path:
@@ -89,33 +91,64 @@ def _dedupe_items(items: list[Any], seen: set[str]) -> tuple[list[Any], int]:
     return unique, skipped
 
 
-def _parse_accounts(raw: str) -> list[dict[str, str]]:
-    """Parse multiline accounts. Each line can be token|refresh or token,refresh."""
+def _cell_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _parse_accounts_excel(upload: Any) -> list[dict[str, str]]:
+    """Parse an uploaded Excel file into token pairs.
+
+    Expects the first sheet and two columns:
+    - column A: token
+    - column B: refresh token
+    Header row is optional.
+    """
+    if upload is None or not getattr(upload, "filename", ""):
+        raise ValueError("Vui lòng upload file Excel danh sách tài khoản")
+
+    ext = Path(upload.filename).suffix.lower()
+    if ext not in ALLOWED_ACCOUNT_EXTENSIONS:
+        raise ValueError("Chỉ hỗ trợ file Excel .xlsx/.xlsm/.xltx/.xltm")
+
+    workbook = load_workbook(upload.stream, read_only=True, data_only=True)
+    sheet = workbook.worksheets[0]
+    rows = sheet.iter_rows(values_only=True)
+
+    try:
+        first_row = next(rows)
+    except StopIteration:
+        workbook.close()
+        raise ValueError("File Excel rỗng")
+
+    header = [_cell_text(value).lower() for value in first_row[:4]]
+    has_header = any("token" in value for value in header) and any(
+        "refresh" in value or "rf" in value for value in header
+    )
+
+    if has_header:
+        token_index = 0
+        refresh_index = 1
+        for idx, value in enumerate(header):
+            if "token" in value and "refresh" not in value and "rf" not in value:
+                token_index = idx
+            if "refresh" in value or "rf" in value:
+                refresh_index = idx
+        data_rows = rows
+    else:
+        token_index = 0
+        refresh_index = 1
+        data_rows = iter([first_row, *rows])
+
     accounts: list[dict[str, str]] = []
-    for line in raw.splitlines():
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
-        token = ""
-        refresh = ""
-        if "rf_token=" in text or "_TaaS.auth.crm.rf_token=" in text:
-            token_match = re.search(
-                r"(?:_TaaS\.auth\.crm\.token|token)\s*=\s*([^;|,\t]+)", text, re.I
-            )
-            refresh_match = re.search(
-                r"(?:_TaaS\.auth\.crm\.rf_token|rf_token)\s*=\s*([^;|,\t]+)",
-                text,
-                re.I,
-            )
-            if token_match and refresh_match:
-                token = token_match.group(1).strip()
-                refresh = refresh_match.group(1).strip()
-        else:
-            parts = [part.strip() for part in re.split(r"[\t,|]", text) if part.strip()]
-            if len(parts) >= 2:
-                token, refresh = parts[0], parts[1]
+    for row in data_rows:
+        token = _cell_text(row[token_index] if len(row) > token_index else "")
+        refresh = _cell_text(row[refresh_index] if len(row) > refresh_index else "")
         if token and refresh:
             accounts.append({"token": token, "refresh_token": refresh})
+
+    workbook.close()
     return accounts
 
 
@@ -264,10 +297,13 @@ def start_job():
         if job["status"] == "running":
             return jsonify({"error": "Đang có một job chạy"}), 409
 
-    raw_accounts = request.form.get("accounts", "")
-    accounts = _parse_accounts(raw_accounts)
+    accounts_file = request.files.get("accounts_file")
+    try:
+        accounts = _parse_accounts_excel(accounts_file)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not accounts:
-        return jsonify({"error": "Vui lòng nhập danh sách tài khoản hợp lệ"}), 400
+        return jsonify({"error": "Không đọc được tài khoản nào từ file Excel"}), 400
 
     try:
         start_page = max(1, int(request.form.get("start_page", "1")))
@@ -401,6 +437,27 @@ def export_csv():
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.get("/download-template")
+def download_template():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "accounts"
+    sheet.append(["token", "refresh_token"])
+    sheet.append(["token_1", "refresh_token_1"])
+    sheet.append(["token_2", "refresh_token_2"])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name="tradeit-accounts-template.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 if __name__ == "__main__":
