@@ -9,55 +9,83 @@
       color-scheme: dark;
       font-family: Inter, system-ui, sans-serif;
       --bg: #08111f;
-      --panel: rgba(15, 23, 42, 0.86);
+      --bg2: #0d1728;
+      --panel: rgba(15, 23, 42, 0.88);
+      --panel-soft: rgba(15, 23, 42, 0.58);
       --panel-border: rgba(148, 163, 184, 0.18);
       --text: #e2e8f0;
       --muted: #94a3b8;
       --accent: #38bdf8;
       --accent-2: #a855f7;
-      --ok: #34d399;
+      --good: #34d399;
+      --danger: #fb7185;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #edf4ff;
+      --bg2: #f7fbff;
+      --panel: rgba(255, 255, 255, 0.88);
+      --panel-soft: rgba(255, 255, 255, 0.65);
+      --panel-border: rgba(59, 130, 246, 0.14);
+      --text: #0f172a;
+      --muted: #475569;
+      --accent: #0284c7;
+      --accent-2: #7c3aed;
+      --good: #059669;
+      --danger: #e11d48;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       color: var(--text);
       background:
-        radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 32%),
-        radial-gradient(circle at top right, rgba(168, 85, 247, 0.14), transparent 28%),
-        linear-gradient(180deg, #0b1220 0%, #08111f 100%);
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), transparent 28%),
+        radial-gradient(circle at top right, rgba(168, 85, 247, 0.15), transparent 24%),
+        linear-gradient(180deg, var(--bg2), var(--bg));
+      min-height: 100vh;
     }
-    main { max-width: 1240px; margin: 0 auto; padding: 28px 20px 40px; }
+    main { max-width: 1320px; margin: 0 auto; padding: 28px 20px 40px; }
     .hero {
-      display: flex; justify-content: space-between; gap: 16px; align-items: end;
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
       margin-bottom: 22px;
     }
-    h1 { margin: 0 0 8px; font-size: clamp(30px, 4vw, 44px); letter-spacing: -0.03em; }
+    h1 { margin: 0 0 8px; font-size: clamp(30px, 4vw, 46px); letter-spacing: -0.03em; }
     .muted { color: var(--muted); }
     .pill-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
     .pill {
+      display: inline-flex; align-items: center; gap: 6px;
       padding: 7px 12px; border: 1px solid var(--panel-border); border-radius: 999px;
-      background: rgba(15, 23, 42, 0.55); color: #cbd5e1; font-size: 13px;
+      background: var(--panel-soft); color: var(--muted); font-size: 13px;
     }
-    .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; }
+    .grid { display: grid; grid-template-columns: 1.18fr 0.82fr; gap: 20px; }
     .stack { display: grid; gap: 20px; }
     .card {
       background: var(--panel);
-      backdrop-filter: blur(16px);
       border: 1px solid var(--panel-border);
       border-radius: 18px;
       padding: 22px;
-      box-shadow: 0 16px 50px rgba(2, 6, 23, 0.32);
+      box-shadow: 0 16px 50px rgba(2, 6, 23, 0.22);
+      backdrop-filter: blur(16px);
     }
-    .card h2 { margin: 0 0 10px; font-size: 18px; }
-    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    label { display: block; margin: 14px 0 6px; color: #cbd5e1; font-size: 14px; }
-    input[type="text"], input[type="number"], input[type="file"], textarea {
+    .card h2 { margin: 0 0 8px; font-size: 18px; }
+    .section-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    label { display: block; margin: 14px 0 6px; color: var(--muted); font-size: 14px; }
+    input[type="text"], input[type="number"], input[type="file"], textarea, select {
       width: 100%;
       padding: 12px 13px;
       border-radius: 12px;
-      border: 1px solid #334155;
+      border: 1px solid rgba(100, 116, 139, 0.38);
       background: rgba(2, 6, 23, 0.72);
       color: white;
+      outline: none;
+    }
+    :root[data-theme="light"] input[type="text"],
+    :root[data-theme="light"] input[type="number"],
+    :root[data-theme="light"] input[type="file"],
+    :root[data-theme="light"] textarea,
+    :root[data-theme="light"] select {
+      background: rgba(255, 255, 255, 0.92);
+      color: #0f172a;
     }
     input[type="file"] { padding: 10px; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -66,35 +94,34 @@
       display: inline-flex; align-items: center; justify-content: center;
       padding: 11px 16px; border: 0; border-radius: 12px;
       background: linear-gradient(135deg, var(--accent), #60a5fa);
-      color: #082f49; font-weight: 800; cursor: pointer; text-decoration: none;
+      color: white; font-weight: 800; cursor: pointer; text-decoration: none;
+      box-shadow: 0 10px 28px rgba(2, 132, 199, 0.24);
     }
-    button.secondary, .link-button.secondary { background: rgba(71, 85, 105, 0.95); color: white; }
-    button.ghost, .link-button.ghost { background: transparent; color: #cbd5e1; border: 1px solid #334155; }
+    button.secondary, .link-button.secondary {
+      background: rgba(71, 85, 105, 0.95);
+      color: white;
+      box-shadow: none;
+    }
+    button.ghost, .link-button.ghost {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--panel-border);
+      box-shadow: none;
+    }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
+    .toolbar button { margin-top: 8px; }
     .stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .stat {
       border: 1px solid var(--panel-border);
       border-radius: 14px;
       padding: 14px;
-      background: rgba(15, 23, 42, 0.55);
+      background: var(--panel-soft);
     }
     .stat .label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
-    .stat .value { font-size: 24px; font-weight: 800; line-height: 1.1; }
+    .stat .value { font-size: 24px; font-weight: 800; line-height: 1.1; word-break: break-word; }
     .status { color: var(--accent); }
     .note { font-size: 13px; line-height: 1.55; color: var(--muted); }
-    .files { margin-top: 20px; }
-    .file-list { max-height: 300px; overflow: auto; display: grid; gap: 8px; }
-    .file-row {
-      display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center;
-      padding: 12px 0; border-bottom: 1px solid rgba(51, 65, 85, 0.8);
-    }
-    .file-row input { width: auto; transform: scale(1.05); }
-    .file-row button { margin: 0; padding: 8px 11px; }
-    textarea.editor {
-      box-sizing: border-box; width: 100%; min-height: 300px; resize: vertical;
-      padding: 12px; border-radius: 12px; border: 1px solid #334155;
-      background: rgba(2, 6, 23, 0.72); color: white; font: 13px monospace;
-    }
-    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; } .toolbar button { margin-top: 10px; }
+    code { background: rgba(148, 163, 184, 0.14); padding: 1px 5px; border-radius: 6px; }
     .upload-box {
       border: 1px dashed rgba(56, 189, 248, 0.35);
       border-radius: 16px;
@@ -103,10 +130,52 @@
     }
     .helper { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 8px; }
     .mini { font-size: 12px; color: #8ca3bf; }
-    @media (max-width: 920px) {
+    .dataset-bar { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+    .files { margin-top: 20px; }
+    .file-list { max-height: 300px; overflow: auto; display: grid; gap: 8px; margin-top: 12px; }
+    .file-row {
+      display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center;
+      padding: 12px 0; border-bottom: 1px solid rgba(51, 65, 85, 0.8);
+    }
+    .file-row input { width: auto; transform: scale(1.05); }
+    .file-row button { margin: 0; padding: 8px 11px; }
+    .file-empty {
+      padding: 18px;
+      border: 1px dashed var(--panel-border);
+      border-radius: 14px;
+      color: var(--muted);
+      background: var(--panel-soft);
+    }
+    .editor-wrap { margin-top: 16px; }
+    .table-wrap { overflow: auto; border: 1px solid var(--panel-border); border-radius: 14px; }
+    table.editor-table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    .editor-table th, .editor-table td {
+      border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+      padding: 8px;
+      vertical-align: top;
+    }
+    .editor-table th {
+      position: sticky; top: 0; background: var(--panel);
+      z-index: 1; text-align: left; font-size: 12px; color: var(--muted);
+    }
+    .editor-table td input {
+      width: 100%; padding: 8px 10px; border-radius: 10px;
+      border: 1px solid rgba(100, 116, 139, 0.34); background: rgba(2, 6, 23, 0.45);
+      color: inherit;
+    }
+    .editor-table td.row-index { width: 56px; color: var(--muted); font-weight: 700; text-align: center; }
+    .editor-table td.actions-cell { width: 72px; text-align: center; }
+    .editor-table td.actions-cell button { margin: 0; padding: 7px 9px; }
+    .table-note { margin-top: 10px; }
+    .theme-button {
+      align-self: flex-start;
+      white-space: nowrap;
+    }
+    .theme-button::before { content: "◐"; margin-right: 8px; }
+    @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
-      .row, .stat-grid { grid-template-columns: 1fr; }
-      .hero { align-items: start; flex-direction: column; }
+      .row, .stat-grid, .dataset-bar { grid-template-columns: 1fr; }
+      .hero { flex-direction: column; }
     }
   </style>
 </head>
@@ -115,15 +184,15 @@
   <div class="hero">
     <div>
       <h1>TradeIT Crawler Control Center</h1>
-      <div class="muted">Upload Excel danh sách acc, crawl tuần tự, xem/sửa file và export CSV dấu chấm.</div>
+      <div class="muted">Chọn bộ dữ liệu đích, upload Excel tài khoản, crawl tuần tự và tách CSV theo từng file.</div>
       <div class="pill-row">
-        <span class="pill">Multi-account</span>
-        <span class="pill">Auto dedupe</span>
         <span class="pill">Excel upload</span>
+        <span class="pill">Dataset separation</span>
+        <span class="pill">Table editor</span>
         <span class="pill">CSV delimiter: .</span>
       </div>
     </div>
-    <a class="link-button ghost" href="/download-template">Tải template Excel</a>
+    <button type="button" id="theme-toggle" class="ghost theme-button" onclick="toggleTheme()">Đổi sáng/tối</button>
   </div>
 
   <div class="grid">
@@ -131,23 +200,38 @@
       <div class="card">
         <div class="section-title">
           <div>
-            <h2>1) Nạp file Excel tài khoản</h2>
-            <div class="note">Sheet đầu tiên, 2 cột: <code>token</code> và <code>refresh_token</code>.</div>
+            <h2>1) Chọn file/bộ dữ liệu đích</h2>
+            <div class="note">Mỗi bộ dữ liệu sẽ có file CSV riêng để tránh trộn record của importer/HS code khác nhau.</div>
           </div>
-          <span class="pill">.xlsx / .xlsm / .xltx / .xltm</span>
+          <a class="link-button ghost" href="/download-template">Tải template Excel</a>
         </div>
+
+        <div class="dataset-bar">
+          <div>
+            <label>Chọn bộ dữ liệu đã có</label>
+            <select id="dataset_select"></select>
+          </div>
+          <div>
+            <label>Hoặc nhập tên mới</label>
+            <input id="dataset_name" name="dataset_name" type="text" value="{{ job.dataset_name }}" placeholder="VD: importer_hscode">
+          </div>
+        </div>
+        <p class="note" style="margin-top: 8px;">Nếu đổi <code>Importer</code> hoặc <code>HS Code</code>, hãy chọn/tạo bộ dữ liệu mới để CSV không bị trộn.</p>
+
         <form method="post" action="/api/jobs" enctype="multipart/form-data" onsubmit="return confirmStart()">
+          <input type="hidden" id="form_dataset_name" name="dataset_name" value="{{ job.dataset_name }}">
           <div class="upload-box">
             <label>File Excel danh sách tài khoản</label>
             <input id="accounts_file" name="accounts_file" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" required>
             <div class="helper">
               <div class="mini" id="file-name">Chưa chọn file</div>
-              <a class="link-button secondary" href="/download-template">Mẫu Excel</a>
+              <span class="mini">Sheet đầu tiên, cột: <code>token</code> / <code>refresh_token</code></span>
             </div>
           </div>
+
           <div class="row">
-            <div><label>Importer</label><input name="importer" value="netherland"></div>
-            <div><label>HS Code</label><input name="hs_code" value="090411"></div>
+            <div><label>Importer</label><input name="importer" id="importer" value="netherland"></div>
+            <div><label>HS Code</label><input name="hs_code" id="hs_code" value="090411"></div>
           </div>
           <div class="row">
             <div><label>Trang bắt đầu</label><input name="start_page" type="number" min="1" value="1"></div>
@@ -163,29 +247,37 @@
             <button class="secondary" type="submit" formaction="/api/jobs/stop" formnovalidate>Dừng</button>
           </div>
         </form>
-        <p class="note">Excel không cần nhập tay; chỉ cần 2 cột token / refresh token. Nếu file có header, web sẽ tự nhận.</p>
+        <p class="note">Web sẽ lưu riêng theo bộ dữ liệu đã chọn, nên khi đổi importer/HS code chỉ cần tạo file/bộ mới.</p>
       </div>
 
-      <div class="card">
+      <div class="card files">
         <div class="section-title">
           <div>
             <h2>2) File đã crawl</h2>
-            <div class="note">Xem, sửa và chọn những trang muốn gộp trước khi tải CSV.</div>
+            <div class="note">Xem trước, chỉnh theo bảng và chọn những file muốn gộp vào CSV.</div>
           </div>
           <div class="toolbar">
             <button type="button" onclick="selectAllFiles(true)">Chọn tất cả</button>
             <button class="secondary" type="button" onclick="selectAllFiles(false)">Bỏ chọn</button>
           </div>
         </div>
+        <div id="current-dataset" class="note" style="margin-top: 8px;"></div>
         <div id="file-list" class="file-list">Đang tải danh sách...</div>
-        <div id="editor" hidden>
-          <h3 id="editor-title"></h3>
-          <textarea class="editor" id="editor-content" spellcheck="false"></textarea>
-          <div class="toolbar">
-            <button type="button" onclick="saveFile()">Lưu thay đổi</button>
-            <button class="secondary" type="button" onclick="closeEditor()">Đóng</button>
+
+        <div id="editor" class="editor-wrap" hidden>
+          <div class="section-title">
+            <div>
+              <h2 id="editor-title">Chỉnh sửa file</h2>
+              <div id="editor-subtitle" class="note"></div>
+            </div>
+            <div class="toolbar">
+              <button type="button" onclick="addRow()">Thêm dòng</button>
+              <button type="button" onclick="saveFile()">Lưu thay đổi</button>
+              <button class="secondary" type="button" onclick="closeEditor()">Đóng</button>
+            </div>
           </div>
-          <p id="editor-message" class="note"></p>
+          <div id="table-holder"></div>
+          <p id="editor-message" class="note table-note"></p>
         </div>
       </div>
     </section>
@@ -195,41 +287,184 @@
         <div class="section-title">
           <div>
             <h2>3) Trạng thái chạy</h2>
-            <div class="note">Theo dõi acc hiện tại, trang hiện tại và số record mới.</div>
+            <div class="note">Theo dõi dataset, tài khoản hiện tại và số record mới.</div>
           </div>
-          <span class="pill" id="status">{{ job.status }}</span>
+          <span class="pill status" id="status">{{ job.status }}</span>
         </div>
         <div class="stat-grid" style="margin-top: 14px;">
+          <div class="stat"><div class="label">Dataset</div><div id="dataset_name_status" class="value">{{ job.dataset_name }}</div></div>
           <div class="stat"><div class="label">Trang</div><div id="page" class="value">{{ job.page }}</div></div>
           <div class="stat"><div class="label">Records</div><div id="records" class="value">{{ job.records }}</div></div>
           <div class="stat"><div class="label">Tài khoản</div><div id="account_index" class="value">{{ job.account_index }}/{{ job.account_total }}</div></div>
-          <div class="stat"><div class="label">Acc hiện tại</div><div id="account_label" class="value">{{ job.account_label }}</div></div>
+        </div>
+        <div class="stat" style="margin-top: 12px;">
+          <div class="label">Acc hiện tại</div><div id="account_label" class="value">{{ job.account_label }}</div>
         </div>
         <p id="message" class="note" style="margin-top: 14px;">{{ job.message }}</p>
         <div class="actions">
-          <button id="export-button" type="button" onclick="exportSelected()">Tải các file đã chọn</button>
+          <button id="export-button" type="button" onclick="exportSelected()">Tải CSV của bộ dữ liệu</button>
         </div>
       </div>
     </aside>
   </div>
 </main>
+
 <script>
+  let editingDataset = '';
   let editingPage = null;
-  const accountsFile = document.getElementById('accounts_file');
-  const fileName = document.getElementById('file-name');
-  accountsFile.addEventListener('change', function() {
-    fileName.textContent = accountsFile.files.length ? accountsFile.files[0].name : 'Chưa chọn file';
-  });
-  async function refresh() {
-    const data = await fetch('/api/status').then(r => r.json());
-    for (const key of ['status', 'page', 'records', 'message', 'account_label']) document.getElementById(key).textContent = data[key] ?? '-';
-    document.getElementById('account_index').textContent = `${data.account_index ?? 0}/${data.account_total ?? 0}`;
+  let editingRecords = [];
+  let editingColumns = [];
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
   }
+
+  function currentTheme() {
+    return document.documentElement.dataset.theme || 'dark';
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('tradeit-theme', theme);
+    document.getElementById('theme-toggle').textContent = theme === 'light' ? 'Chuyển sang tối' : 'Đổi sáng/tối';
+  }
+
+  function toggleTheme() {
+    applyTheme(currentTheme() === 'light' ? 'dark' : 'light');
+  }
+
+  function initTheme() {
+    const saved = localStorage.getItem('tradeit-theme');
+    if (saved === 'light' || saved === 'dark') {
+      applyTheme(saved);
+      return;
+    }
+    const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    applyTheme(prefersLight ? 'light' : 'dark');
+  }
+
+  function currentDataset() {
+    const input = document.getElementById('dataset_name');
+    return input.value.trim() || 'legacy';
+  }
+
+  function syncDatasetName() {
+    const datasetInput = document.getElementById('dataset_name');
+    const formDataset = document.getElementById('form_dataset_name');
+    formDataset.value = datasetInput.value.trim() || 'legacy';
+  }
+
+  function selectAllFiles(selected) {
+    document.querySelectorAll('.file-choice').forEach(input => input.checked = selected);
+  }
+
+  function flattenRecord(item, prefix = '', out = {}) {
+    if (item === null || item === undefined) {
+      out[prefix] = '';
+      return out;
+    }
+    if (Array.isArray(item)) {
+      out[prefix] = item.map(v => typeof v === 'object' ? JSON.stringify(v) : String(v)).join(' | ');
+      return out;
+    }
+    if (typeof item === 'object') {
+      for (const [key, value] of Object.entries(item)) {
+        const next = prefix ? `${prefix}__${key}` : key;
+        flattenRecord(value, next, out);
+      }
+      return out;
+    }
+    out[prefix] = String(item);
+    return out;
+  }
+
+  function renderEditor(records) {
+    const holder = document.getElementById('table-holder');
+    if (!Array.isArray(records) || records.length === 0) {
+      holder.innerHTML = '<div class="file-empty">File rỗng hoặc không có dữ liệu để hiển thị.</div>';
+      editingRecords = [];
+      editingColumns = [];
+      return;
+    }
+
+    editingRecords = records.map(record => (record && typeof record === 'object' && !Array.isArray(record))
+      ? flattenRecord(record)
+      : { value: String(record) });
+
+    const columns = new Set();
+    editingRecords.forEach(record => Object.keys(record).forEach(key => columns.add(key)));
+    editingColumns = Array.from(columns);
+
+    let html = '<div class="table-wrap"><table class="editor-table" id="editor-table"><thead><tr><th>#</th>';
+    html += editingColumns.map(col => `<th>${escapeHtml(col)}</th>`).join('');
+    html += '<th></th></tr></thead><tbody>';
+    editingRecords.forEach((record, rowIndex) => {
+      html += `<tr data-row="${rowIndex}"><td class="row-index">${rowIndex + 1}</td>`;
+      editingColumns.forEach(col => {
+        const value = record[col] ?? '';
+        html += `<td><input data-col="${escapeHtml(col)}" value="${escapeHtml(value)}"></td>`;
+      });
+      html += `<td class="actions-cell"><button type="button" class="secondary" onclick="removeRow(this)">Xóa</button></td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    holder.innerHTML = html;
+  }
+
+  function addRow() {
+    if (!editingColumns.length) return;
+    const tbody = document.querySelector('#editor-table tbody');
+    const rowIndex = tbody.children.length + 1;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="row-index">${rowIndex}</td>` +
+      editingColumns.map(col => `<td><input data-col="${escapeHtml(col)}" value=""></td>`).join('') +
+      '<td class="actions-cell"><button type="button" class="secondary" onclick="removeRow(this)">Xóa</button></td>';
+    tbody.appendChild(tr);
+  }
+
+  function removeRow(button) {
+    const tr = button.closest('tr');
+    tr.remove();
+    [...document.querySelectorAll('#editor-table tbody tr')].forEach((row, index) => {
+      row.querySelector('.row-index').textContent = index + 1;
+    });
+  }
+
+  async function loadDatasets() {
+    const response = await fetch('/api/datasets');
+    const data = await response.json();
+    const select = document.getElementById('dataset_select');
+    const input = document.getElementById('dataset_name');
+    select.innerHTML = [
+      '<option value="__custom__">Tạo / nhập bộ dữ liệu mới...</option>',
+      ...data.datasets.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.label)}${item.files ? ` (${item.files})` : ''}</option>`)
+    ].join('');
+    const current = data.current || input.value || 'legacy';
+    input.value = current;
+    if ([...select.options].some(option => option.value === current)) {
+      select.value = current;
+    } else {
+      select.value = '__custom__';
+    }
+    document.getElementById('dataset_name_status').textContent = current;
+    document.getElementById('current-dataset').textContent = `Đang xem bộ dữ liệu: ${current}`;
+  }
+
   async function loadFiles() {
-    const response = await fetch('/api/files');
+    syncDatasetName();
+    const dataset = currentDataset();
+    const response = await fetch(`/api/files?dataset=${encodeURIComponent(dataset)}`);
     const files = await response.json();
     const list = document.getElementById('file-list');
-    if (!files.length) { list.textContent = 'Chưa có file dữ liệu.'; return; }
+    document.getElementById('current-dataset').textContent = `Đang xem bộ dữ liệu: ${dataset}`;
+    if (!files.length) {
+      list.innerHTML = '<div class="file-empty">Chưa có file dữ liệu trong bộ này.</div>';
+      return;
+    }
     list.innerHTML = files.map(file => `
       <div class="file-row">
         <input class="file-choice" type="checkbox" value="${file.page}" checked>
@@ -237,50 +472,131 @@
         <button type="button" onclick="openFile(${file.page})">Xem / sửa</button>
       </div>`).join('');
   }
-  function selectAllFiles(selected) {
-    document.querySelectorAll('.file-choice').forEach(input => input.checked = selected);
-  }
-  async function exportSelected() {
-    const selected = [...document.querySelectorAll('.file-choice:checked')].map(input => input.value);
-    if (!selected.length) { alert('Hãy chọn ít nhất một file để gộp.'); return; }
-    const form = document.createElement('form');
-    form.method = 'POST'; form.action = '/api/export';
-    selected.forEach(page => {
-      const input = document.createElement('input');
-      input.type = 'hidden'; input.name = 'files'; input.value = page;
-      form.appendChild(input);
-    });
-    document.body.appendChild(form); form.submit();
-  }
+
   async function openFile(page) {
-    const response = await fetch(`/api/files/${page}`);
+    const dataset = currentDataset();
+    const response = await fetch(`/api/files/${encodeURIComponent(dataset)}/${page}`);
     const data = await response.json();
-    if (!response.ok) { alert(data.error || 'Không đọc được file.'); return; }
+    if (!response.ok) {
+      alert(data.error || 'Không đọc được file.');
+      return;
+    }
+    editingDataset = dataset;
     editingPage = page;
-    document.getElementById('editor-title').textContent = `Chỉnh sửa trang ${page}`;
-    document.getElementById('editor-content').value = JSON.stringify(data.records, null, 2);
-    document.getElementById('editor-message').textContent = '';
     document.getElementById('editor').hidden = false;
-    document.getElementById('editor').scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('editor-title').textContent = `Chỉnh sửa trang ${page}`;
+    document.getElementById('editor-subtitle').textContent = `Bộ dữ liệu: ${dataset}`;
+    document.getElementById('editor-message').textContent = '';
+    renderEditor(data.records);
+    document.getElementById('editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+
+  function collectEditorRecords() {
+    const rows = [...document.querySelectorAll('#editor-table tbody tr')];
+    return rows.map(row => {
+      const record = {};
+      row.querySelectorAll('input[data-col]').forEach(input => {
+        const key = input.dataset.col;
+        const value = input.value.trim();
+        if (value !== '') {
+          record[key] = value;
+        }
+      });
+      return record;
+    }).filter(record => Object.keys(record).length > 0);
+  }
+
   async function saveFile() {
-    let records;
-    try { records = JSON.parse(document.getElementById('editor-content').value); }
-    catch (_) { document.getElementById('editor-message').textContent = 'JSON không hợp lệ.'; return; }
-    if (!Array.isArray(records)) { document.getElementById('editor-message').textContent = 'Nội dung phải là một JSON array.'; return; }
-    const response = await fetch(`/api/files/${editingPage}`, {
-      method: 'PUT', headers: {'Content-Type': 'application/json'},
+    if (!editingDataset || editingPage === null) return;
+    const records = collectEditorRecords();
+    const response = await fetch(`/api/files/${encodeURIComponent(editingDataset)}/${editingPage}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ records })
     });
     const data = await response.json();
-    document.getElementById('editor-message').textContent = data.message || data.error;
-    if (response.ok) loadFiles();
+    document.getElementById('editor-message').textContent = data.message || data.error || '';
+    if (response.ok) {
+      await loadFiles();
+    }
   }
-  function closeEditor() { document.getElementById('editor').hidden = true; editingPage = null; }
-  setInterval(refresh, 2000);
-  setInterval(loadFiles, 5000);
-  loadFiles();
-  function confirmStart() { return true; }
+
+  function closeEditor() {
+    document.getElementById('editor').hidden = true;
+    editingDataset = '';
+    editingPage = null;
+    editingRecords = [];
+    editingColumns = [];
+  }
+
+  async function exportSelected() {
+    const dataset = currentDataset();
+    const selected = [...document.querySelectorAll('.file-choice:checked')].map(input => input.value);
+    if (!selected.length) {
+      alert('Hãy chọn ít nhất một file để gộp.');
+      return;
+    }
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/api/export';
+    const datasetInput = document.createElement('input');
+    datasetInput.type = 'hidden';
+    datasetInput.name = 'dataset';
+    datasetInput.value = dataset;
+    form.appendChild(datasetInput);
+    selected.forEach(page => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'files';
+      input.value = page;
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  function confirmStart() {
+    syncDatasetName();
+    return true;
+  }
+
+  function bindUi() {
+    const datasetInput = document.getElementById('dataset_name');
+    const datasetSelect = document.getElementById('dataset_select');
+    const fileInput = document.getElementById('accounts_file');
+    const fileName = document.getElementById('file-name');
+
+    fileInput.addEventListener('change', function() {
+      fileName.textContent = fileInput.files.length ? fileInput.files[0].name : 'Chưa chọn file';
+    });
+    datasetSelect.addEventListener('change', async function() {
+      if (datasetSelect.value !== '__custom__') {
+        datasetInput.value = datasetSelect.value;
+      }
+      await loadFiles();
+    });
+    datasetInput.addEventListener('change', async function() {
+      const match = [...datasetSelect.options].some(option => option.value === datasetInput.value.trim());
+      datasetSelect.value = match ? datasetInput.value.trim() : '__custom__';
+      await loadFiles();
+    });
+  }
+
+  async function refreshStatus() {
+    const data = await fetch('/api/status').then(r => r.json());
+    for (const key of ['status', 'page', 'records', 'message', 'account_label']) {
+      const el = document.getElementById(key);
+      if (el) el.textContent = data[key] ?? '-';
+    }
+    document.getElementById('account_index').textContent = `${data.account_index ?? 0}/${data.account_total ?? 0}`;
+    document.getElementById('dataset_name_status').textContent = data.dataset_name ?? currentDataset();
+  }
+
+  initTheme();
+  bindUi();
+  loadDatasets().then(loadFiles);
+  setInterval(refreshStatus, 2000);
+  setInterval(loadFiles, 8000);
 </script>
 </body>
 </html>

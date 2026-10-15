@@ -86,7 +86,14 @@ Chuẩn bị một file Excel với sheet đầu tiên gồm 2 cột:
 Nếu file có hàng tiêu đề, web sẽ tự nhận. Nên dùng nút **Tải template Excel** để
 lấy mẫu sẵn.
 
-Web sẽ crawl tuần tự từng account, tự bỏ qua record đã có trong các file cũ và
+### Chọn bộ dữ liệu đích
+
+Mỗi lần crawl nên chọn hoặc tạo một **bộ dữ liệu** riêng ở ô **Chọn bộ dữ liệu đã có**
+/ **Hoặc nhập tên mới**. Bộ dữ liệu này quyết định thư mục lưu record và file CSV
+đầu ra, nên khi đổi `Importer` hoặc `HS Code` bạn chỉ cần tạo bộ mới để không
+trộn record cũ vào CSV mới.
+
+Web sẽ crawl tuần tự từng account, tự bỏ qua record đã có trong bộ dữ liệu đó và
 gộp kết quả cuối cùng thành một CSV duy nhất.
 
 Ứng dụng chỉ chạy một job tại một thời điểm. Cookie không được ghi ra file;
@@ -105,6 +112,11 @@ nhầm dữ liệu.
 CSV xuất ra đang dùng dấu `.` để phân tách cột, phù hợp với thao tác **Text to
 Columns** trong Excel. Các trường lồng nhau được đổi sang dạng `a__b` để không
 bị tách nhầm khi dùng dấu `.`.
+
+### Giao diện
+
+- Có nút đổi sáng/tối ngay trên dashboard.
+- Phần xem file đã crawl hiển thị theo bảng, sửa từng ô rồi lưu lại.
 
 ### CLI
 

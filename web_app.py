@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from io import BytesIO
@@ -19,6 +20,11 @@ import tradeit_crawler as crawler
 
 app = Flask(__name__)
 job_lock = threading.Lock()
+LEGACY_DATA_DIR = Path("data")
+LEGACY_STATE_FILE = Path("state.json")
+DATASETS_ROOT = Path("datasets")
+LEGACY_DATASET_NAME = "legacy"
+ACTIVE_THEME_KEY = "tradeit-theme"
 job: dict[str, Any] = {
     "status": "idle",
     "message": "Sẵn sàng",
@@ -28,6 +34,7 @@ job: dict[str, Any] = {
     "account_index": 0,
     "account_total": 0,
     "account_label": "",
+    "dataset_name": LEGACY_DATASET_NAME,
     "started_at": None,
 }
 stop_event = threading.Event()
@@ -52,6 +59,117 @@ def _read_page(page: int) -> list[Any]:
     if not isinstance(payload, list):
         raise ValueError(f"File trang {page} không chứa một mảng dữ liệu")
     return payload
+
+
+def _dataset_page_path(dataset: str, page: int) -> Path:
+    if page < 1:
+        raise ValueError("Số trang phải lớn hơn 0")
+    return _dataset_data_dir(dataset) / f"{page}.json"
+
+
+def _read_page_in_dataset(dataset: str, page: int) -> list[Any]:
+    path = _dataset_page_path(dataset, page)
+    if not path.is_file():
+        raise FileNotFoundError(f"Không tìm thấy file trang {page}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError(f"File trang {page} không chứa một mảng dữ liệu")
+    return payload
+
+
+def _clean_name(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name.strip()).strip("_-")
+    if not slug:
+        raise ValueError("Tên bộ dữ liệu không hợp lệ")
+    return slug.lower()
+
+
+def _dataset_dir(name: str) -> Path:
+    if name == LEGACY_DATASET_NAME:
+        return Path(".")
+    return DATASETS_ROOT / _clean_name(name)
+
+
+def _dataset_data_dir(name: str) -> Path:
+    if name == LEGACY_DATASET_NAME:
+        return LEGACY_DATA_DIR
+    return _dataset_dir(name) / "data"
+
+
+def _dataset_state_file(name: str) -> Path:
+    if name == LEGACY_DATASET_NAME:
+        return LEGACY_STATE_FILE
+    return _dataset_dir(name) / "state.json"
+
+
+def _dataset_csv_file(name: str) -> Path:
+    if name == LEGACY_DATASET_NAME:
+        return Path("data.csv")
+    return _dataset_dir(name) / "data.csv"
+
+
+def _dataset_display_name(name: str) -> str:
+    if name == LEGACY_DATASET_NAME:
+        return "Mặc định (legacy)"
+    return name
+
+
+def _dataset_exists(name: str) -> bool:
+    data_dir = _dataset_data_dir(name)
+    return data_dir.is_dir() and any(data_dir.glob("*.json"))
+
+
+def _list_datasets() -> list[dict[str, Any]]:
+    names = [LEGACY_DATASET_NAME]
+    if DATASETS_ROOT.is_dir():
+        for path in DATASETS_ROOT.iterdir():
+            if path.is_dir():
+                names.append(path.name)
+    unique = []
+    seen = set()
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        unique.append(
+            {
+                "name": name,
+                "label": _dataset_display_name(name),
+                "files": len(list(_dataset_data_dir(name).glob("*.json")))
+                if _dataset_data_dir(name).is_dir()
+                else len(list(LEGACY_DATA_DIR.glob("*.json")))
+                if name == LEGACY_DATASET_NAME and LEGACY_DATA_DIR.is_dir()
+                else 0,
+            }
+        )
+    return unique
+
+
+def _default_dataset_name(importer: str, hs_code: str) -> str:
+    return _clean_name(f"{importer}_{hs_code}")
+
+
+def _ensure_dataset(name: str) -> str:
+    dataset = _clean_name(name) if name != LEGACY_DATASET_NAME else LEGACY_DATASET_NAME
+    if dataset != LEGACY_DATASET_NAME:
+        _dataset_data_dir(dataset).mkdir(parents=True, exist_ok=True)
+    return dataset
+
+
+def _set_crawler_paths(name: str) -> str:
+    dataset = _ensure_dataset(name)
+    crawler.DATA_DIR = _dataset_data_dir(dataset)
+    crawler.STATE_FILE = _dataset_state_file(dataset)
+    return dataset
+
+
+def _resolve_dataset_from_request(form: Any) -> str:
+    dataset_name = str(form.get("dataset_name", "")).strip()
+    if dataset_name:
+        return dataset_name
+    importer = str(form.get("importer", "netherland")).strip() or "netherland"
+    hs_code = str(form.get("hs_code", "090411")).strip() or "090411"
+    return _default_dataset_name(importer, hs_code)
 
 
 def _fingerprint(item: Any) -> str:
@@ -162,6 +280,8 @@ def _run(options: dict[str, Any]) -> None:
     total: int | None = None
     seen: set[str] = options["seen"]
     accounts: list[dict[str, str]] = options["accounts"]
+    dataset_name: str = options["dataset_name"]
+    _set_crawler_paths(dataset_name)
     body = {"importer": options["importer"], "hsCode": options["hs_code"]}
 
     if not options["force"]:
@@ -178,6 +298,7 @@ def _run(options: dict[str, Any]) -> None:
         account_index=0,
         account_total=len(accounts),
         account_label="",
+        dataset_name=dataset_name,
     )
 
     try:
@@ -317,6 +438,8 @@ def start_job():
     if end_page is not None and end_page < start_page:
         return jsonify({"error": "Trang kết thúc phải lớn hơn hoặc bằng trang bắt đầu"}), 400
 
+    dataset_raw = _resolve_dataset_from_request(request.form)
+    dataset_name = _set_crawler_paths(dataset_raw)
     seen = _load_seen_fingerprints()
     options = {
         "start_page": start_page,
@@ -328,6 +451,7 @@ def start_job():
         "hs_code": request.form.get("hs_code", "090411").strip() or "090411",
         "accounts": accounts,
         "seen": seen,
+        "dataset_name": dataset_name,
     }
 
     stop_event.clear()
@@ -341,6 +465,7 @@ def start_job():
             account_index=0,
             account_total=len(accounts),
             account_label="",
+            dataset_name=dataset_name,
             started_at=time.time(),
         )
 
@@ -360,16 +485,29 @@ def status():
         return jsonify(dict(job))
 
 
+@app.get("/api/datasets")
+def datasets():
+    with job_lock:
+        current = job.get("dataset_name", LEGACY_DATASET_NAME)
+    return jsonify({"current": current, "datasets": _list_datasets()})
+
+
 @app.get("/api/files")
 def list_files():
+    dataset_name = request.args.get("dataset", "").strip()
+    if not dataset_name:
+        with job_lock:
+            dataset_name = str(job.get("dataset_name", LEGACY_DATASET_NAME))
+    dataset_name = _ensure_dataset(dataset_name)
+    data_dir = _dataset_data_dir(dataset_name)
     files = []
-    if crawler.DATA_DIR.is_dir():
-        for path in sorted(crawler.DATA_DIR.glob("*.json"), key=merge_data.page_number):
+    if data_dir.is_dir():
+        for path in sorted(data_dir.glob("*.json"), key=merge_data.page_number):
             page = merge_data.page_number(path)
             if page >= 10**9:
                 continue
             try:
-                count = len(_read_page(page))
+                count = len(_read_page_in_dataset(dataset_name, page))
                 size = path.stat().st_size
                 updated_at = path.stat().st_mtime
             except (OSError, ValueError, json.JSONDecodeError):
@@ -386,20 +524,22 @@ def list_files():
     return jsonify(files)
 
 
-@app.get("/api/files/<page>")
-def get_file(page: str):
+@app.get("/api/files/<dataset>/<page>")
+def get_file(dataset: str, page: str):
     try:
+        dataset = _ensure_dataset(dataset)
         page_number = int(page)
-        return jsonify({"page": page_number, "records": _read_page(page_number)})
+        return jsonify({"page": page_number, "records": _read_page_in_dataset(dataset, page_number)})
     except (ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 
-@app.put("/api/files/<page>")
-def update_file(page: str):
+@app.put("/api/files/<dataset>/<page>")
+def update_file(dataset: str, page: str):
     try:
+        dataset = _ensure_dataset(dataset)
         page_number = int(page)
-        path = _page_path(page)
+        path = _dataset_page_path(dataset, page_number)
         payload = request.get_json(silent=True)
         records = payload.get("records") if isinstance(payload, dict) else None
         if not isinstance(records, list):
@@ -416,22 +556,28 @@ def update_file(page: str):
 @app.post("/api/export")
 def export_csv():
     selected = request.form.getlist("files")
+    dataset_name = request.form.get("dataset", "").strip()
+    if not dataset_name:
+        with job_lock:
+            dataset_name = str(job.get("dataset_name", LEGACY_DATASET_NAME))
+    dataset_name = _ensure_dataset(dataset_name)
+    data_dir = _dataset_data_dir(dataset_name)
     if selected:
         try:
             pages = sorted({int(value) for value in selected})
             records = []
             for page in pages:
-                records.extend((page, merge_data.flatten(item)) for item in _read_page(page))
+                records.extend((page, merge_data.flatten(item)) for item in _read_page_in_dataset(dataset_name, page))
         except (ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as exc:
             return jsonify({"error": str(exc)}), 400
     else:
-        records = merge_data.load_records(crawler.DATA_DIR)
+        records = merge_data.load_records(data_dir)
 
-    output = Path("data.csv")
+    output = _dataset_csv_file(dataset_name)
     if not records:
         return jsonify({"error": "Chưa có dữ liệu để xuất"}), 400
     merge_data.write_csv(records, output, dedupe=True, encoding="utf-8-sig")
-    return send_file(output, as_attachment=True, download_name="buyers.csv")
+    return send_file(output, as_attachment=True, download_name=f"{dataset_name}-buyers.csv")
 
 
 @app.get("/health")
