@@ -109,9 +109,9 @@ chỉ những file được tick mới được gộp; dùng **Chọn tất cả
 file hiện có. Nếu không chọn file nào, hệ thống không tạo bản tải xuống để tránh
 nhầm dữ liệu.
 
-CSV xuất ra đang dùng dấu `.` để phân tách cột, phù hợp với thao tác **Text to
+CSV xuất ra đang dùng dấu `;` để phân tách cột, phù hợp với thao tác **Text to
 Columns** trong Excel. Các trường lồng nhau được đổi sang dạng `a__b` để không
-bị tách nhầm khi dùng dấu `.`.
+bị tách nhầm khi dùng dấu `;`.
 
 ### Giao diện
 
@@ -201,3 +201,4 @@ Tool nhớ tiến độ theo **2 lớp**:
 
 - Tool lưu kết quả theo từng trang và state nên chạy lại an toàn (resume-friendly, không tốn credit cho trang đã xong).
 - Muốn crawl lại từ đầu: xóa `state.json` + thư mục `data/`, hoặc dùng `--force`.
+- Nếu chỉ test 1 trang, hãy đặt `--start-page 1 --end-page 1` để job kết thúc ngay sau trang đó.

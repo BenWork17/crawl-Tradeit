@@ -110,7 +110,7 @@ def write_csv(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding=encoding, newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames, restval="", delimiter=".")
+        writer = csv.DictWriter(fh, fieldnames=fieldnames, restval="", delimiter=";")
         writer.writeheader()
         for page, record in records:
             row = dict(record)
