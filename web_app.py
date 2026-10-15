@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import traceback
 import threading
 import time
 from io import BytesIO
@@ -352,7 +353,7 @@ def _run(options: dict[str, Any]) -> None:
                         page += 1
                         continue
 
-                    payload = fetch_page(session, cookie, page, options["per_page"], body)
+                    payload = crawler.fetch_page(session, cookie, page, options["per_page"], body)
                     data = payload.get("data") or {}
                     items = data.get("items")
                     if not isinstance(items, list):
@@ -379,6 +380,9 @@ def _run(options: dict[str, Any]) -> None:
                         ),
                     )
                     crawler.save_state(page, total, len(seen))
+
+                    if options["end_page"] is not None and page >= options["end_page"]:
+                        break
 
                     if isinstance(row_count, int) and row_count < options["per_page"]:
                         page += 1
@@ -418,6 +422,13 @@ def _run(options: dict[str, Any]) -> None:
         )
     except (requests.RequestException, RuntimeError, OSError, ValueError) as exc:
         _update(run_id, status="error", message=str(exc))
+    except Exception as exc:
+        _update(
+            run_id,
+            status="error",
+            message=f"Lỗi không xác định: {exc.__class__.__name__}: {exc}",
+        )
+        print(traceback.format_exc())
 
 
 @app.get("/")
