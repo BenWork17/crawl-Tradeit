@@ -26,6 +26,7 @@ DATASETS_ROOT = Path("datasets")
 LEGACY_DATASET_NAME = "legacy"
 ACTIVE_THEME_KEY = "tradeit-theme"
 job: dict[str, Any] = {
+    "run_id": 0,
     "status": "idle",
     "message": "Sẵn sàng",
     "page": 0,
@@ -270,12 +271,17 @@ def _parse_accounts_excel(upload: Any) -> list[dict[str, str]]:
     return accounts
 
 
-def _update(**values: Any) -> None:
+def _update(run_id: int | None = None, **values: Any) -> None:
     with job_lock:
+        if run_id is not None and job.get("run_id") != run_id:
+            return
+        if job.get("status") == "stopped" and values.get("status") != "stopped":
+            return
         job.update(values)
 
 
 def _run(options: dict[str, Any]) -> None:
+    run_id = int(options["run_id"])
     page = options["start_page"]
     total: int | None = None
     seen: set[str] = options["seen"]
@@ -290,6 +296,7 @@ def _run(options: dict[str, Any]) -> None:
             total = saved_state.get("total")
 
     _update(
+        run_id,
         status="running",
         message="Đang chuẩn bị crawl",
         page=page,
@@ -316,6 +323,7 @@ def _run(options: dict[str, Any]) -> None:
             crawler.log_cookie_used(cookie)
 
             _update(
+                run_id,
                 account_index=account_index,
                 account_total=len(accounts),
                 account_label=f"Acc {account_index}/{len(accounts)}",
@@ -333,6 +341,7 @@ def _run(options: dict[str, Any]) -> None:
 
                     if not options["force"] and crawler.page_file_path(page).exists():
                         _update(
+                            run_id,
                             page=page,
                             records=len(seen),
                             message=(
@@ -353,10 +362,14 @@ def _run(options: dict[str, Any]) -> None:
                     if isinstance(data.get("total"), int):
                         total = data["total"]
 
+                    if stop_event.is_set():
+                        break
+
                     unique_items, _skipped = _dedupe_items(items, seen)
                     crawler.save_page(unique_items, page, options["force"])
 
                     _update(
+                        run_id,
                         page=page,
                         records=len(seen),
                         total=total,
@@ -380,6 +393,7 @@ def _run(options: dict[str, Any]) -> None:
                 if account_index >= len(accounts):
                     raise
                 _update(
+                    run_id,
                     message=(
                         f"Tài khoản {account_index}/{len(accounts)} dừng ở trang {page}: "
                         f"{exc}. Chuyển sang tài khoản kế tiếp."
@@ -391,18 +405,19 @@ def _run(options: dict[str, Any]) -> None:
                 session.close()
 
         if stop_event.is_set():
-            _update(status="stopped", message="Đã dừng theo yêu cầu", records=len(seen))
+            _update(run_id, status="stopped", message="Đã dừng theo yêu cầu", records=len(seen))
         else:
-            _update(status="completed", message=f"Hoàn tất: {len(seen)} bản ghi", records=len(seen))
+            _update(run_id, status="completed", message=f"Hoàn tất: {len(seen)} bản ghi", records=len(seen))
     except (crawler.AuthError, crawler.CreditError) as exc:
         _update(
+            run_id,
             status="error",
             message=f"Không crawl được tài khoản cuối ở trang {page}: {exc}.",
             records=len(seen),
             total=total,
         )
     except (requests.RequestException, RuntimeError, OSError, ValueError) as exc:
-        _update(status="error", message=str(exc))
+        _update(run_id, status="error", message=str(exc))
 
 
 @app.get("/")
@@ -456,7 +471,9 @@ def start_job():
 
     stop_event.clear()
     with job_lock:
+        next_run_id = int(job.get("run_id", 0)) + 1
         job.update(
+            run_id=next_run_id,
             status="running",
             message="Đang khởi động",
             page=start_page,
@@ -469,6 +486,7 @@ def start_job():
             started_at=time.time(),
         )
 
+    options["run_id"] = next_run_id
     threading.Thread(target=_run, args=(options,), daemon=True).start()
     return redirect(url_for("index"))
 
@@ -476,6 +494,9 @@ def start_job():
 @app.post("/api/jobs/stop")
 def stop_job():
     stop_event.set()
+    with job_lock:
+        job["status"] = "stopped"
+        job["message"] = "Đã dừng theo yêu cầu"
     return redirect(url_for("index"))
 
 
