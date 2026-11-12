@@ -88,18 +88,42 @@ lấy mẫu sẵn.
 
 ### Chọn bộ dữ liệu đích
 
-Mỗi lần crawl nên chọn hoặc tạo một **bộ dữ liệu** riêng ở ô **Chọn bộ dữ liệu đã có**
-/ **Hoặc nhập tên mới**. Bộ dữ liệu này quyết định thư mục lưu record và file CSV
-đầu ra, nên khi đổi `Importer` hoặc `HS Code` bạn chỉ cần tạo bộ mới để không
-trộn record cũ vào CSV mới.
+Mỗi lần crawl nên chọn hoặc tạo một **bộ dữ liệu** riêng. Bộ dữ liệu quyết định
+thư mục lưu record và file Excel đầu ra.
 
-Web sẽ crawl tuần tự từng account, tự bỏ qua record đã có trong bộ dữ liệu đó và
-gộp kết quả cuối cùng thành một CSV duy nhất.
+Nếu để trống tên bộ dữ liệu, hệ thống **tự đặt tên theo điều kiện tìm kiếm**:
+quốc gia/vùng + HS Code, ví dụ `nl-vn_090411`. Nhờ vậy hai điều kiện khác nhau
+không bao giờ ghi chung một thư mục.
+
+Nếu bạn cố ghi một điều kiện mới vào bộ dữ liệu đã crawl bằng điều kiện khác,
+ứng dụng sẽ **từ chối** và yêu cầu tạo bộ mới (hoặc tick *Crawl lại và ghi đè*).
+
+### Điều kiện tìm kiếm (HS Code + region_list)
+
+Form gửi lên TradeIT đúng hai trường của trang buyer-search:
+
+| Trường | Ý nghĩa |
+|--------|---------|
+| `hsCode` | Mã HS cần tìm (2–10 chữ số; dấu chấm/khoảng trắng được tự bỏ) |
+| `region_list` | Mảng quốc gia/vùng **nhập hàng**; mỗi phần tử có `type`, `code`, `isoCode`, `isoAlpha2`, `name`, `nameEn`, `upCode`, `countryCode` |
+
+Chọn quốc gia bằng danh sách có ô tìm kiếm, chọn nhanh theo châu lục (checkbox ở
+tiêu đề nhóm), hoặc các nút **NL + VN**, **Toàn EU**, **ASEAN**. Khung
+*Body gửi lên TradeIT* hiển thị chính xác JSON sẽ POST, nên bạn kiểm tra được
+trước khi tốn credit.
+
+> **Lưu ý quan trọng:** bản cũ hardcode `{"importer": "netherland", "hsCode": "090411"}`
+> và bỏ qua lựa chọn của người dùng, nên mọi lần crawl đều tìm cho Hà Lan. Hiện
+> trường `importer` đã bị loại bỏ hoàn toàn; chỉ `hsCode` + `region_list` được gửi,
+> và chúng lấy đúng từ form.
+
+Web sẽ crawl tuần tự từng account, tự bỏ qua trang đã có trong bộ dữ liệu đó và
+gộp kết quả cuối cùng thành một file Excel duy nhất.
 
 Ứng dụng chỉ chạy một job tại một thời điểm. Cookie không được ghi ra file;
 không nên bật debug hoặc chia sẻ URL dashboard công khai nếu chưa thêm lớp đăng nhập.
-Các file `data/`, `state.json` và CSV trên hosting miễn phí có thể mất khi
-container khởi động lại; hãy dùng persistent disk hoặc tải CSV sau mỗi phiên.
+Các file `data/`, `state.json` và file Excel trên hosting miễn phí có thể mất khi
+container khởi động lại; hãy dùng persistent disk hoặc tải file sau mỗi phiên.
 
 ### Xem và chọn file trên web
 
@@ -131,21 +155,37 @@ dạng text để hạn chế Excel tự đổi mã HS, số 0 đầu hoặc ng�
 | `--delay N` | 1.5 | Giây nghỉ giữa các request |
 | `--force` | off | Ghi đè file `data/<n>.json` đã tồn tại |
 | `--cookie-file PATH` | None | Đọc cookie từ file |
-| `--body JSON` | `{"importer":"netherland","hsCode":"090411"}` | Body request tùy chỉnh |
+| `--hs-code CODE` | `090411` | HS Code cần tìm |
+| `--region NAME` | `NL` | Quốc gia/vùng nhập hàng; lặp lại được (`--region NL --region VN`) |
+| `--region-list "NL,VN"` | None | Nhiều quốc gia, phân tách bằng dấu phẩy |
+| `--body JSON` | None | Ghi đè toàn bộ body (`hsCode` + `region_list`) |
+
+`--region` nhận mã ISO2 (`VN`), ISO3 (`VNM`), tên tiếng Anh (`Vietnam`), tên
+tiếng Việt (`Việt Nam`), tên châu lục (`Asia`, `Châu Á`) hoặc `all`.
+
+```bash
+# Tìm buyer nhập khẩu hạt tiêu (090411) tại Hà Lan và Việt Nam
+python tradeit_crawler.py --hs-code 090411 --region NL --region VN
+
+# Toàn bộ châu Á
+python tradeit_crawler.py --hs-code 090411 --region Asia
+```
 
 ## Cấu trúc output
 
 ```
 project/
 ├── tradeit_crawler.py   # crawl
+├── regions.py           # danh mục quốc gia/vùng + dựng region_list
 ├── merge_data.py        # gộp data/*.json -> CSV
 ├── cookies.txt
 ├── data/            # <curPage>.json
 ├── data.csv         # kết quả gộp (merge_data.py)
+├── datasets/        # mỗi điều kiện tìm kiếm một thư mục riêng
 ├── logs/
 │   ├── crawler.log      # log chi tiết mỗi request
 │   └── cookies_used.log # timestamp + account id (JWT), KHÔNG log cookie
-└── state.json       # curPage để resume / sau Ctrl+C
+└── state.json       # curPage + query để resume / sau Ctrl+C
 ```
 
 ## Gộp ra CSV

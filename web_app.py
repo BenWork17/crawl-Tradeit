@@ -17,14 +17,20 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
 import merge_data
+import regions
 import tradeit_crawler as crawler
 
 
 app = Flask(__name__)
 job_lock = threading.Lock()
-LEGACY_DATA_DIR = Path("data")
-LEGACY_STATE_FILE = Path("state.json")
-DATASETS_ROOT = Path("datasets")
+# Every stored path is anchored to this file's directory. Using bare relative
+# paths broke `send_file`, which resolves against the Flask root while
+# `Path.open` resolves against the process CWD (so exports 500'd whenever the
+# app was started from another working directory).
+BASE_DIR = Path(__file__).resolve().parent
+LEGACY_DATA_DIR = BASE_DIR / "data"
+LEGACY_STATE_FILE = BASE_DIR / "state.json"
+DATASETS_ROOT = BASE_DIR / "datasets"
 LEGACY_DATASET_NAME = "legacy"
 ACTIVE_THEME_KEY = "tradeit-theme"
 job: dict[str, Any] = {
@@ -38,6 +44,7 @@ job: dict[str, Any] = {
     "account_total": 0,
     "account_label": "",
     "dataset_name": LEGACY_DATASET_NAME,
+    "query_label": "",
     "started_at": None,
 }
 stop_event = threading.Event()
@@ -145,7 +152,7 @@ def _clean_name(name: str) -> str:
 
 def _dataset_dir(name: str) -> Path:
     if name == LEGACY_DATASET_NAME:
-        return Path(".")
+        return BASE_DIR
     return DATASETS_ROOT / _clean_name(name)
 
 
@@ -163,7 +170,7 @@ def _dataset_state_file(name: str) -> Path:
 
 def _dataset_csv_file(name: str) -> Path:
     if name == LEGACY_DATASET_NAME:
-        return Path("data.csv")
+        return BASE_DIR / "data.csv"
     return _dataset_dir(name) / "data.csv"
 
 
@@ -204,8 +211,10 @@ def _list_datasets() -> list[dict[str, Any]]:
     return unique
 
 
-def _default_dataset_name(importer: str, hs_code: str) -> str:
-    return _clean_name(f"{importer}_{hs_code}")
+def _default_dataset_name(region_codes: list[str], hs_code: str) -> str:
+    """Build a dataset name from the actual query, e.g. ``nl-vn_090411``."""
+    region_part = "-".join(code.lower() for code in region_codes) or "world"
+    return _clean_name(f"{region_part}_{hs_code}")
 
 
 def _ensure_dataset(name: str) -> str:
@@ -222,13 +231,63 @@ def _set_crawler_paths(name: str) -> str:
     return dataset
 
 
-def _resolve_dataset_from_request(form: Any) -> str:
-    dataset_name = str(form.get("dataset_name", "")).strip()
-    if dataset_name:
+def _parse_region_selection(form: Any) -> list[str]:
+    """Read the region selector from the submitted form.
+
+    The UI posts ``region_codes`` (possibly several values) plus an optional
+    free-text ``region_text``. Both are resolved through ``regions``; when the
+    user picked nothing we refuse instead of falling back to a hardcoded
+    country.
+    """
+    raw: list[str] = []
+    for value in form.getlist("region_codes"):
+        raw.append(value)
+    raw.extend(form.getlist("region_list"))
+
+    free_text = str(form.get("region_text", "") or "").strip()
+    if free_text:
+        raw.append(free_text)
+
+    legacy = str(form.get("importer", "") or "").strip()
+    if legacy:
+        # Backwards compatibility with the old ``Importer`` field, but it is now
+        # honoured instead of being ignored.
+        raw.append(legacy)
+
+    cleaned = [value for value in raw if str(value).strip()]
+    if not cleaned:
+        raise regions.RegionError(
+            "Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng (region_list)."
+        )
+
+    codes, unknown = regions.resolve_region_codes(cleaned)
+    if unknown:
+        raise regions.RegionError(
+            "Không nhận diện được quốc gia/vùng: " + ", ".join(unknown[:5])
+        )
+    return codes
+
+
+def _resolve_dataset_from_request(form: Any, body: dict[str, Any]) -> str:
+    """Pick the dataset to write into.
+
+    An explicit dataset always wins; otherwise the name is derived from the
+    real query (countries + HS code) so two different searches never share one
+    folder by accident.
+    """
+    dataset_name = str(form.get("dataset_name", "") or "").strip()
+    if dataset_name and dataset_name != "__custom__":
         return dataset_name
-    importer = str(form.get("importer", "netherland")).strip() or "netherland"
-    hs_code = str(form.get("hs_code", "090411")).strip() or "090411"
-    return _default_dataset_name(importer, hs_code)
+
+    codes = sorted(
+        {
+            str(item.get("code") or "").upper()
+            for item in body.get("region_list", [])
+            if isinstance(item, dict)
+        }
+    )
+    hs_code = str(body.get("hsCode") or "")
+    return _default_dataset_name(codes, hs_code)
 
 
 def _fingerprint(item: Any) -> str:
@@ -253,6 +312,37 @@ def _load_seen_fingerprints() -> set[str]:
         for item in payload:
             seen.add(_fingerprint(item))
     return seen
+
+
+def _dataset_query(dataset: str) -> str | None:
+    """Return the query fingerprint previously saved for a dataset."""
+    state_file = _dataset_state_file(dataset)
+    if not state_file.is_file():
+        return None
+    try:
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    query = data.get("query")
+    return query if isinstance(query, str) else None
+
+
+def _assert_dataset_matches_query(dataset: str, query: str, force: bool) -> None:
+    """Refuse to mix pages crawled with a different query into one dataset.
+
+    Without this check, crawling VN into a folder that already holds NL pages
+    would skip those pages as "already done" and silently return NL data.
+    """
+    if force:
+        return
+    previous = _dataset_query(dataset)
+    if previous is None:
+        return
+    if previous != query:
+        raise ValueError(
+            f"Bộ dữ liệu '{dataset}' đã crawl với điều kiện khác ({previous}). "
+            f"Hãy tạo bộ dữ liệu mới, hoặc tick 'Crawl lại và ghi đè' để dùng lại."
+        )
 
 
 def _dedupe_items(items: list[Any], seen: set[str]) -> tuple[list[Any], int]:
@@ -345,11 +435,21 @@ def _run(options: dict[str, Any]) -> None:
     seen: set[str] = options["seen"]
     accounts: list[dict[str, str]] = options["accounts"]
     dataset_name: str = options["dataset_name"]
-    _set_crawler_paths(dataset_name)
-    body = {"importer": options["importer"], "hsCode": options["hs_code"]}
+    # Resolve this run's paths once. The crawler's module globals are shared by
+    # every thread, so a stopped run that wakes up late could otherwise write
+    # its pages into whatever dataset the *next* job selected.
+    data_dir = _dataset_data_dir(dataset_name)
+    state_file = _dataset_state_file(dataset_name)
+    stop_token = options["stop_token"]
+    body = options["body"]
+    query = crawler.query_fingerprint(body)
+    query_label = crawler.describe_body(body)
+
+    def cancelled() -> bool:
+        return stop_token.is_set() or stop_event.is_set()
 
     if not options["force"]:
-        saved_state = crawler.load_state()
+        saved_state = crawler.load_state(state_file)
         if saved_state:
             total = saved_state.get("total")
 
@@ -364,6 +464,7 @@ def _run(options: dict[str, Any]) -> None:
         account_total=len(accounts),
         account_label="",
         dataset_name=dataset_name,
+        query_label=query_label,
     )
 
     try:
@@ -371,7 +472,7 @@ def _run(options: dict[str, Any]) -> None:
             raise ValueError("Chưa có tài khoản hợp lệ")
 
         for account_index, account in enumerate(accounts, start=1):
-            if stop_event.is_set():
+            if cancelled():
                 break
 
             cookie = (
@@ -393,11 +494,11 @@ def _run(options: dict[str, Any]) -> None:
 
             session = requests.Session()
             try:
-                while not stop_event.is_set():
+                while not cancelled():
                     if options["end_page"] is not None and page > options["end_page"]:
                         break
 
-                    if not options["force"] and crawler.page_file_path(page).exists():
+                    if not options["force"] and (data_dir / f"{page}.json").exists():
                         _update(
                             run_id,
                             page=page,
@@ -420,11 +521,17 @@ def _run(options: dict[str, Any]) -> None:
                     if isinstance(data.get("total"), int):
                         total = data["total"]
 
-                    if stop_event.is_set():
+                    if cancelled():
                         break
 
-                    unique_items, _skipped = _dedupe_items(items, seen)
-                    crawler.save_page(unique_items, page, options["force"])
+                    # Keep every record the API returned for this page. Filtering
+                    # ``items`` against fingerprints of *already saved* rows and
+                    # then overwriting the page file destroyed data whenever a
+                    # page overlapped a previous one. De-duplication now happens
+                    # only at export time, where it belongs.
+                    crawler.save_page(items, page, True, data_dir)
+                    for item in items:
+                        seen.add(_fingerprint(item))
 
                     _update(
                         run_id,
@@ -433,10 +540,10 @@ def _run(options: dict[str, Any]) -> None:
                         total=total,
                         message=(
                             f"Tài khoản {account_index}/{len(accounts)}: "
-                            f"trang {page} đã lưu {len(unique_items)} bản ghi mới"
+                            f"trang {page} đã lưu {len(items)} bản ghi"
                         ),
                     )
-                    crawler.save_state(page, total, len(seen))
+                    crawler.save_state(page, total, len(seen), query, state_file)
 
                     if options["end_page"] is not None and page >= options["end_page"]:
                         break
@@ -449,7 +556,7 @@ def _run(options: dict[str, Any]) -> None:
                         break
 
                     page += 1
-                    stop_event.wait(options["delay"])
+                    options["stop_token"].wait(options["delay"])
             except (crawler.AuthError, crawler.CreditError) as exc:
                 if account_index >= len(accounts):
                     raise
@@ -465,7 +572,7 @@ def _run(options: dict[str, Any]) -> None:
             finally:
                 session.close()
 
-        if stop_event.is_set():
+        if cancelled():
             _update(run_id, status="stopped", message="Đã dừng theo yêu cầu", records=len(seen))
         else:
             _update(run_id, status="completed", message=f"Hoàn tất: {len(seen)} bản ghi", records=len(seen))
@@ -491,7 +598,7 @@ def _run(options: dict[str, Any]) -> None:
 @app.get("/")
 def index():
     with job_lock:
-        current = dict(job)
+        current = {key: value for key, value in job.items() if key != "stop_token"}
     return render_template("index.html", job=current)
 
 
@@ -521,20 +628,37 @@ def start_job():
     if end_page is not None and end_page < start_page:
         return jsonify({"error": "Trang kết thúc phải lớn hơn hoặc bằng trang bắt đầu"}), 400
 
-    dataset_raw = _resolve_dataset_from_request(request.form)
-    dataset_name = _set_crawler_paths(dataset_raw)
+    try:
+        region_codes = _parse_region_selection(request.form)
+        body = crawler.build_search_body(
+            str(request.form.get("hs_code", "") or ""),
+            region_codes,
+        )
+    except regions.RegionError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    dataset_raw = _resolve_dataset_from_request(request.form, body)
+    force = request.form.get("force") == "on"
+    try:
+        dataset_name = _set_crawler_paths(dataset_raw)
+        _assert_dataset_matches_query(
+            dataset_name, crawler.query_fingerprint(body), force
+        )
+    except (ValueError, regions.RegionError) as exc:
+        return jsonify({"error": str(exc)}), 400
     seen = _load_seen_fingerprints()
+    run_stop = threading.Event()
     options = {
         "start_page": start_page,
         "end_page": end_page,
         "per_page": per_page,
         "delay": delay,
-        "force": request.form.get("force") == "on",
-        "importer": request.form.get("importer", "netherland").strip() or "netherland",
-        "hs_code": request.form.get("hs_code", "090411").strip() or "090411",
+        "force": force,
+        "body": body,
         "accounts": accounts,
         "seen": seen,
         "dataset_name": dataset_name,
+        "stop_token": run_stop,
     }
 
     stop_event.clear()
@@ -551,8 +675,11 @@ def start_job():
             account_total=len(accounts),
             account_label="",
             dataset_name=dataset_name,
+            query_label=crawler.describe_body(body),
             started_at=time.time(),
         )
+        # Remembered so /api/jobs/stop can signal exactly this run.
+        job["stop_token"] = run_stop
 
     options["run_id"] = next_run_id
     threading.Thread(target=_run, args=(options,), daemon=True).start()
@@ -563,15 +690,68 @@ def start_job():
 def stop_job():
     stop_event.set()
     with job_lock:
+        token = job.get("stop_token")
         job["status"] = "stopped"
         job["message"] = "Đã dừng theo yêu cầu"
+    if token is not None:
+        token.set()
     return redirect(url_for("index"))
 
 
 @app.get("/api/status")
 def status():
     with job_lock:
-        return jsonify(dict(job))
+        return jsonify({key: value for key, value in job.items() if key != "stop_token"})
+
+
+@app.get("/api/regions")
+def list_regions():
+    """Country/continent catalog for the region picker."""
+    return jsonify(
+        {
+            "continents": [
+                {
+                    "code": code,
+                    "name": name,
+                    "name_vi": name_vi,
+                    "countries": regions.countries_in_continent(code),
+                }
+                for code, name, name_vi in regions.CONTINENTS
+            ],
+            "countries": [
+                {
+                    "code": row[0],
+                    "iso3": row[1],
+                    "name": row[2],
+                    "name_vi": row[3],
+                    "continent": row[4],
+                    "region": row[5],
+                }
+                for row in regions.COUNTRIES
+            ],
+            "default": list(crawler.DEFAULT_REGION_CODES),
+            "default_hs_code": crawler.DEFAULT_HS_CODE,
+        }
+    )
+
+
+@app.post("/api/search-preview")
+def search_preview():
+    """Build and return the exact request body that will be sent to TradeIT."""
+    payload = request.get_json(silent=True) or {}
+    raw_regions = payload.get("region_codes")
+    if raw_regions is None:
+        raw_regions = payload.get("regions") or []
+    if isinstance(raw_regions, str):
+        raw_regions = [raw_regions]
+    try:
+        body = crawler.build_search_body(
+            str(payload.get("hs_code", "") or ""),
+            [str(value) for value in raw_regions],
+        )
+    except regions.RegionError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"body": body, "label": crawler.describe_body(body)})
 
 
 @app.get("/api/datasets")

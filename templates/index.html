@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TradeIT Crawler</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f766e'/%3E%3Cpath d='M8 20l5-6 4 3 7-9' stroke='%2334d399' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -188,6 +189,58 @@
       white-space: nowrap;
     }
     .theme-button::before { content: "◐"; margin-right: 8px; }
+    .query-block {
+      margin-top: 18px; padding: 16px;
+      border: 1px solid var(--panel-border); border-radius: 16px;
+      background: var(--panel-soft);
+    }
+    .query-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .query-head h3 { margin: 0; font-size: 15px; }
+    .req { color: var(--danger); }
+    button.small { padding: 7px 11px; font-size: 13px; box-shadow: none; }
+    .region-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+    .region-toolbar .toolbar button { margin-top: 0; }
+    .region-list {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 6px; max-height: 280px; overflow: auto; padding: 10px;
+      margin-top: 10px; border: 1px solid var(--panel-border); border-radius: 12px;
+      background: rgba(2, 6, 23, 0.42);
+    }
+    :root[data-theme="light"] .region-list { background: rgba(255, 255, 255, 0.9); }
+    .region-group-title {
+      grid-column: 1 / -1; font-size: 12px; font-weight: 700; letter-spacing: .04em;
+      text-transform: uppercase; color: var(--muted); margin: 8px 0 2px;
+    }
+    .region-option {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      border-radius: 9px; font-size: 14px; cursor: pointer; color: var(--text);
+    }
+    .region-option:hover { background: rgba(56, 189, 248, 0.12); }
+    .region-option.is-selected {
+      background: rgba(56, 189, 248, 0.16);
+      box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.35);
+    }
+    .region-option input { width: auto; margin: 0; }
+    .region-option .code { color: var(--muted); font-size: 12px; }
+    .region-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; max-height: 150px; overflow: auto; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 9px; border-radius: 999px; font-size: 13px;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      background: rgba(56, 189, 248, 0.14);
+    }
+    .chip button { all: unset; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 2px; }
+    .chip button:hover { color: var(--danger); }
+    .payload-box { border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px 12px; }
+    .payload-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+    .payload-summary code { font-size: 12.5px; word-break: break-all; }
+    .payload-box summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+    .payload {
+      margin: 10px 0 0; padding: 10px; border-radius: 10px; overflow: auto; max-height: 220px;
+      background: rgba(2, 6, 23, 0.6); font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+      word-break: break-word;
+    }
+    :root[data-theme="light"] .payload { background: rgba(15, 23, 42, 0.06); }
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
       .row, .stat-grid, .dataset-bar { grid-template-columns: 1fr; }
@@ -217,7 +270,7 @@
         <div class="section-title">
           <div>
             <h2>1) Chọn file/bộ dữ liệu đích</h2>
-            <div class="note">Mỗi bộ dữ liệu sẽ có file CSV riêng để tránh trộn record của importer/HS code khác nhau.</div>
+            <div class="note">Mỗi bộ dữ liệu có thư mục JSON và file Excel riêng, tránh trộn record giữa các điều kiện tìm kiếm.</div>
           </div>
           <a class="link-button ghost" href="/download-template">Tải template Excel</a>
         </div>
@@ -232,9 +285,9 @@
             </div>
           </div>
         </div>
-        <p class="note" style="margin-top: 8px;">Mỗi bộ dữ liệu có thư mục JSON và CSV riêng. Khi đổi <code>Importer</code> hoặc <code>HS Code</code>, hãy tạo bộ mới.</p>
+        <p class="note" style="margin-top: 8px;">Để trống tên bộ dữ liệu thì hệ thống tự đặt theo điều kiện tìm kiếm (ví dụ <code>nl-vn_090411</code>). Mỗi điều kiện khác nhau nên dùng bộ riêng.</p>
 
-        <form method="post" action="/api/jobs" enctype="multipart/form-data" onsubmit="return confirmStart()">
+        <form method="post" action="/api/jobs" enctype="multipart/form-data" onsubmit="return confirmStart(event)">
           <input type="hidden" id="form_dataset_name" name="dataset_name" value="{{ job.dataset_name }}">
           <div class="upload-box">
             <label>File Excel danh sách tài khoản</label>
@@ -245,10 +298,52 @@
             </div>
           </div>
 
-          <div class="row">
-            <div><label>Importer</label><input name="importer" id="importer" value="netherland"></div>
-            <div><label>HS Code</label><input name="hs_code" id="hs_code" value="090411"></div>
+          <div class="query-block">
+            <div class="query-head">
+              <h3>Điều kiện tìm kiếm</h3>
+              <span class="mini">Giống form <code>B.L Search</code> của TradeIT: HS Code + vùng nhập hàng.</span>
+            </div>
+
+            <div class="row">
+              <div>
+                <label for="hs_code">HS Code <span class="req">*</span></label>
+                <input name="hs_code" id="hs_code" type="text" inputmode="numeric"
+                       placeholder="VD: 090411" maxlength="20" required>
+                <div class="mini" id="hs-hint">2–10 chữ số; dấu chấm/khoảng trắng được tự bỏ.</div>
+              </div>
+              <div>
+                <label for="region_search">Tìm quốc gia / vùng</label>
+                <input id="region_search" type="search" autocomplete="off" placeholder="Gõ tên hoặc mã: NL, Vietnam, Asia...">
+                <div class="mini">Nhập để lọc danh sách bên dưới.</div>
+              </div>
+            </div>
+
+            <label style="margin-top: 14px;">Quốc gia/vùng nhập hàng (region_list) <span class="req">*</span></label>
+            <div class="region-toolbar">
+              <div class="toolbar">
+                <button type="button" class="ghost small" onclick="quickSelect('nl_vn')">NL + VN</button>
+                <button type="button" class="ghost small" onclick="quickSelect('eu')">Toàn EU</button>
+                <button type="button" class="ghost small" onclick="quickSelect('asean')">ASEAN</button>
+                <button type="button" class="ghost small" onclick="clearRegions()">Bỏ chọn</button>
+              </div>
+              <span class="pill" id="region-count">0 quốc gia</span>
+            </div>
+            <div id="region-chips" class="region-chips"></div>
+            <div id="region-list" class="region-list" role="group" aria-label="Danh sách quốc gia"></div>
+            <div id="region-message" class="mini" style="margin-top:8px;"></div>
+
+            <div class="payload-box" style="margin-top:14px;">
+              <div class="payload-summary">
+                <span class="mini">Body gửi lên TradeIT:</span>
+                <code id="payload-summary">— chưa đủ điều kiện —</code>
+              </div>
+              <details>
+                <summary>Xem JSON đầy đủ (region_list)</summary>
+                <pre id="payload-preview" class="payload">—</pre>
+              </details>
+            </div>
           </div>
+
           <div class="row">
             <div><label>Trang bắt đầu</label><input name="start_page" type="number" min="1" value="1"></div>
             <div><label>Trang kết thúc (tuỳ chọn)</label><input name="end_page" type="number" min="1"></div>
@@ -263,7 +358,7 @@
             <button class="secondary" type="submit" formaction="/api/jobs/stop" formnovalidate>Dừng</button>
           </div>
         </form>
-        <p class="note">Web sẽ lưu riêng theo bộ dữ liệu đã chọn, nên khi đổi importer/HS code chỉ cần tạo file/bộ mới.</p>
+        <p class="note">Bộ dữ liệu được đặt tên theo điều kiện tìm kiếm (<code>nl-vn_090411</code>). Điều kiện khác nhau phải dùng bộ dữ liệu riêng để không trộn dữ liệu.</p>
       </div>
 
       <div class="card files">
@@ -315,6 +410,9 @@
         </div>
         <div class="stat" style="margin-top: 12px;">
           <div class="label">Acc hiện tại</div><div id="account_label" class="value">{{ job.account_label }}</div>
+        </div>
+        <div class="stat" style="margin-top: 12px;">
+          <div class="label">Điều kiện tìm kiếm</div><div id="query_label" class="value" style="font-size:15px;">{{ job.query_label }}</div>
         </div>
         <p id="message" class="note" style="margin-top: 14px;">{{ job.message }}</p>
         <div class="actions">
@@ -382,10 +480,225 @@
     return input.value.trim() || 'legacy';
   }
 
+  let regionCatalog = { continents: [], countries: [], default: [], default_hs_code: '' };
+  const selectedRegions = new Set();
+
   function syncDatasetName() {
     const datasetInput = document.getElementById('dataset_name');
     const formDataset = document.getElementById('form_dataset_name');
     formDataset.value = datasetInput.value.trim() || 'legacy';
+  }
+
+  async function loadRegions() {
+    const response = await fetch('/api/regions');
+    if (!response.ok) return;
+    regionCatalog = await response.json();
+    const byCode = new Map(regionCatalog.countries.map(c => [c.code, c]));
+
+    if (!document.getElementById('hs_code').value) {
+      document.getElementById('hs_code').value = regionCatalog.default_hs_code || '';
+    }
+    (regionCatalog.default || []).forEach(code => selectedRegions.add(code));
+
+    renderRegionList();
+    renderRegionChips();
+    updatePayloadPreview();
+    document.getElementById('region-message').textContent =
+      `${regionCatalog.countries.length} quốc gia trong danh mục.`;
+    void byCode;
+  }
+
+  function regionQuery() {
+    return document.getElementById('region_search').value.trim().toLowerCase();
+  }
+
+  function regionMatches(country, query) {
+    if (!query) return true;
+    return `${country.name} ${country.name_vi} ${country.code} ${country.iso3}`.toLowerCase().includes(query);
+  }
+
+  function renderRegionList() {
+    const list = document.getElementById('region-list');
+    const query = regionQuery();
+    let html = '';
+    let shown = 0;
+
+    for (const continent of regionCatalog.continents) {
+      const countries = regionCatalog.countries
+        .filter(c => c.continent === continent.code && regionMatches(c, query))
+        .sort((a, b) => {
+          // Selected countries first, then alphabetical by Vietnamese name.
+          const sel = Number(selectedRegions.has(b.code)) - Number(selectedRegions.has(a.code));
+          if (sel !== 0) return sel;
+          return a.name_vi.localeCompare(b.name_vi, 'vi');
+        });
+      if (!countries.length) continue;
+      shown += countries.length;
+      const allSelected = countries.every(c => selectedRegions.has(c.code));
+      html += `<div class="region-group-title">
+        <label style="display:inline-flex;align-items:center;gap:8px;margin:0;text-transform:none;font-size:12px;">
+          <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleContinent('${continent.code}', this.checked)">
+          ${escapeHtml(continent.name_vi)} (${countries.length})
+        </label></div>`;
+      for (const country of countries) {
+        const isSelected = selectedRegions.has(country.code);
+        html += `<label class="region-option${isSelected ? ' is-selected' : ''}">
+          <input type="checkbox" class="region-checkbox" value="${escapeHtml(country.code)}"
+                 ${isSelected ? 'checked' : ''}
+                 onchange="toggleRegion('${escapeHtml(country.code)}', this.checked)">
+          <span>${escapeHtml(country.name_vi)}</span>
+          <span class="code">${escapeHtml(country.code)}</span>
+        </label>`;
+      }
+    }
+
+    if (!shown) {
+      html = '<div class="file-empty" style="grid-column:1/-1;">Không có quốc gia nào khớp từ khoá.</div>';
+    }
+    list.innerHTML = html;
+  }
+
+  function toggleRegion(code, checked) {
+    if (checked) selectedRegions.add(code); else selectedRegions.delete(code);
+    renderRegionChips();
+    updatePayloadPreview();
+  }
+
+  function toggleContinent(code, checked) {
+    const query = regionQuery();
+    for (const country of regionCatalog.countries) {
+      if (country.continent !== code || !regionMatches(country, query)) continue;
+      if (checked) selectedRegions.add(country.code); else selectedRegions.delete(country.code);
+    }
+    renderRegionList();
+    renderRegionChips();
+    updatePayloadPreview();
+  }
+
+  function renderRegionChips() {
+    const holder = document.getElementById('region-chips');
+    const codes = [...selectedRegions].sort();
+    const byCode = new Map(regionCatalog.countries.map(c => [c.code, c]));
+    document.getElementById('region-count').textContent = `${codes.length} quốc gia`;
+    holder.innerHTML = codes.map(code => {
+      const c = byCode.get(code);
+      const label = c ? `${c.name_vi} (${code})` : code;
+      return `<span class="chip">${escapeHtml(label)}
+        <button type="button" title="Bỏ chọn" onclick="toggleRegion('${escapeHtml(code)}', false)" aria-label="Bỏ chọn ${escapeHtml(code)}">×</button>
+      </span>`;
+    }).join('');
+    // Keep the checkboxes in sync when a chip is removed.
+    document.querySelectorAll('.region-checkbox').forEach(box => {
+      box.checked = selectedRegions.has(box.value);
+    });
+  }
+
+  function clearRegions() {
+    selectedRegions.clear();
+    renderRegionList();
+    renderRegionChips();
+    updatePayloadPreview();
+  }
+
+  function quickSelect(preset) {
+    const groups = {
+      nl_vn: ['NL', 'VN'],
+      asean: ['BN', 'ID', 'KH', 'LA', 'MM', 'MY', 'PH', 'SG', 'TH', 'VN'],
+      eu: regionCatalog.countries.filter(c => c.continent === 'EU').map(c => c.code)
+    };
+    selectedRegions.clear();
+    (groups[preset] || []).forEach(code => selectedRegions.add(code));
+    renderRegionList();
+    renderRegionChips();
+    updatePayloadPreview();
+  }
+
+  let previewTimer = null;
+  function updatePayloadPreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+      const hsCode = document.getElementById('hs_code').value.trim();
+      const preview = document.getElementById('payload-preview');
+      const summary = document.getElementById('payload-summary');
+      const message = document.getElementById('region-message');
+      if (!hsCode || !selectedRegions.size) {
+        preview.textContent = '—';
+        summary.textContent = '— chưa đủ điều kiện —';
+        message.textContent = !hsCode
+          ? 'Nhập HS Code để xem payload.'
+          : 'Chọn ít nhất một quốc gia/vùng.';
+        return;
+      }
+      try {
+        const response = await fetch('/api/search-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hs_code: hsCode, region_codes: [...selectedRegions] })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          preview.textContent = '—';
+          summary.textContent = '— lỗi —';
+          message.textContent = data.error || 'Không tạo được payload.';
+          return;
+        }
+        preview.textContent = JSON.stringify(data.body, null, 2);
+        const codes = data.body.region_list.map(r => r.code).join(', ');
+        summary.textContent = `hsCode=${data.body.hsCode} · region_list=[${codes}]`;
+        message.textContent = data.label;
+      } catch (err) {
+        message.textContent = 'Không kiểm tra được payload.';
+      }
+    }, 220);
+  }
+
+  function confirmStart(event) {
+    const hsCode = document.getElementById('hs_code').value.trim();
+    if (!hsCode) {
+      alert('Vui lòng nhập HS Code.');
+      event.preventDefault();
+      return false;
+    }
+    if (!selectedRegions.size) {
+      alert('Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng (region_list).');
+      event.preventDefault();
+      return false;
+    }
+
+    // Post the selection the way TradeIT expects, plus the legacy fields.
+    const form = event.target;
+    form.querySelectorAll('input[name="region_codes"]').forEach(el => el.remove());
+    [...selectedRegions].sort().forEach(code => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'region_codes';
+      input.value = code;
+      form.appendChild(input);
+    });
+    syncDatasetName();
+    return true;
+  }
+
+  function bindUi() {
+    const datasetInput = document.getElementById('dataset_name');
+    const datasetSelect = document.getElementById('dataset_select');
+    const fileInput = document.getElementById('accounts_file');
+    const fileName = document.getElementById('file-name');
+
+    fileInput.addEventListener('change', function() {
+      fileName.textContent = fileInput.files.length ? fileInput.files[0].name : 'Chưa chọn file';
+    });
+    datasetSelect.addEventListener('change', async function() {
+      if (datasetSelect.value !== '__custom__') {
+        datasetInput.value = datasetSelect.value;
+      }
+      await loadFiles();
+    });
+    datasetInput.addEventListener('change', async function() {
+      await loadFiles();
+    });
+    document.getElementById('region_search').addEventListener('input', renderRegionList);
+    document.getElementById('hs_code').addEventListener('input', updatePayloadPreview);
   }
 
   function openDatasetModal() {
@@ -525,16 +838,31 @@
     const files = await response.json();
     const list = document.getElementById('file-list');
     document.getElementById('current-dataset').textContent = `Đang xem bộ dữ liệu: ${dataset}`;
+
+    // Remember the user's ticks: this function also runs on a timer, and
+    // rebuilding the list with "checked" on every file silently undid the
+    // selection right before an export.
+    const previouslyChecked = new Set(
+      [...document.querySelectorAll('.file-choice:checked')].map(input => input.value)
+    );
+    const sameSelectionContext = list.dataset.selectionDataset === dataset;
+
     if (!files.length) {
       list.innerHTML = '<div class="file-empty">Chưa có file dữ liệu trong bộ này.</div>';
+      list.dataset.selectionDataset = dataset;
       return;
     }
-    list.innerHTML = files.map(file => `
+    list.innerHTML = files.map(file => {
+      const page = String(file.page);
+      const checked = sameSelectionContext ? previouslyChecked.has(page) : true;
+      return `
       <div class="file-row">
-        <input class="file-choice" type="checkbox" value="${file.page}" checked>
+        <input class="file-choice" type="checkbox" value="${page}" ${checked ? 'checked' : ''}>
         <span>Trang ${file.page} - ${file.records} bản ghi (${file.name})</span>
         <button type="button" onclick="openFile(${file.page})">Xem / sửa</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
+    list.dataset.selectionDataset = dataset;
   }
 
   async function openFile(page) {
@@ -619,36 +947,11 @@
     form.submit();
   }
 
-  function confirmStart() {
-    syncDatasetName();
-    return true;
-  }
-
-  function bindUi() {
-    const datasetInput = document.getElementById('dataset_name');
-    const datasetSelect = document.getElementById('dataset_select');
-    const fileInput = document.getElementById('accounts_file');
-    const fileName = document.getElementById('file-name');
-
-    fileInput.addEventListener('change', function() {
-      fileName.textContent = fileInput.files.length ? fileInput.files[0].name : 'Chưa chọn file';
-    });
-    datasetSelect.addEventListener('change', async function() {
-      if (datasetSelect.value !== '__custom__') {
-        datasetInput.value = datasetSelect.value;
-      }
-      await loadFiles();
-    });
-    datasetInput.addEventListener('change', async function() {
-      await loadFiles();
-    });
-  }
-
   async function refreshStatus() {
     const data = await fetch('/api/status').then(r => r.json());
-    for (const key of ['status', 'page', 'records', 'message', 'account_label']) {
+    for (const key of ['status', 'page', 'records', 'message', 'account_label', 'query_label']) {
       const el = document.getElementById(key);
-      if (el) el.textContent = data[key] ?? '-';
+      if (el) el.textContent = data[key] || (key === 'query_label' ? '—' : (data[key] ?? '-'));
     }
     document.getElementById('account_index').textContent = `${data.account_index ?? 0}/${data.account_total ?? 0}`;
     document.getElementById('dataset_name_status').textContent = data.dataset_name ?? currentDataset();
@@ -656,6 +959,9 @@
 
   initTheme();
   bindUi();
+  loadRegions().catch(() => {
+    document.getElementById('region-message').textContent = 'Không tải được danh mục quốc gia.';
+  });
   loadDatasets().then(loadFiles);
   setInterval(refreshStatus, 2000);
   setInterval(loadFiles, 8000);

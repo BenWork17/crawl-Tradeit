@@ -27,8 +27,15 @@ from typing import Any, Optional
 
 import requests
 
+import regions
+
 BASE_URL = "https://www.tradeit.global/api/crm/bl/search"
-DEFAULT_BODY: dict[str, Any] = {"importer": "netherland", "hsCode": "090411"}
+
+# The search body must always be built from the user's input. The old
+# module-level default leaked ``{"importer": "netherland", ...}`` into every
+# request, so a query for another country silently searched the Netherlands.
+DEFAULT_HS_CODE = "090411"
+DEFAULT_REGION_CODES: tuple[str, ...] = ("NL",)
 
 DATA_DIR = Path("data")
 LOG_DIR = Path("logs")
@@ -197,6 +204,70 @@ def log_cookie_used(cookie: str) -> None:
         fh.write(f"{_now_iso()} account_id={account_id}\n")
 
 
+def build_search_body(
+    hs_code: str,
+    region_codes: Any,
+) -> dict[str, Any]:
+    """Build the buyer-search request body from user input.
+
+    Args:
+        hs_code: HS code typed by the user (dots/spaces tolerated).
+        region_codes: Country names/codes, or the raw ``region_list`` array
+            (list of dicts) already prepared by the caller.
+
+    Returns:
+        The JSON body to POST, containing ``hsCode`` and ``region_list``.
+
+    Raises:
+        regions.RegionError: When the HS code or the region selection is
+            unusable. Nothing is guessed and no country is defaulted in.
+    """
+    normalized_hs = regions.validate_hs_code(hs_code)
+
+    if isinstance(region_codes, str):
+        raw_values: list[Any] = [region_codes]
+    elif isinstance(region_codes, (list, tuple)):
+        raw_values = list(region_codes)
+    else:
+        raise regions.RegionError("Danh sách quốc gia/vùng không hợp lệ")
+
+    if raw_values and all(isinstance(item, dict) for item in raw_values):
+        codes = [
+            str(item.get("code") or item.get("isoAlpha2") or "").upper()
+            for item in raw_values
+        ]
+        codes = [code for code in codes if code]
+        if not codes:
+            raise regions.RegionError("Danh sách quốc gia/vùng rỗng")
+        region_list = [
+            item for item in raw_values if str(item.get("code") or "").upper() in codes
+        ]
+    else:
+        codes, unknown = regions.resolve_region_codes(
+            [str(item) for item in raw_values]
+        )
+        if unknown:
+            logger.warning("Bỏ qua quốc gia không nhận diện được: %s", ", ".join(unknown))
+        region_list = regions.build_region_list(codes)
+
+    if not region_list:
+        raise regions.RegionError("Chưa chọn quốc gia/vùng nào để tìm")
+
+    return {"hsCode": normalized_hs, "region_list": region_list}
+
+
+def describe_body(body: dict[str, Any]) -> str:
+    """Short human-readable summary of a search body, for logs/UI."""
+    hs_code = body.get("hsCode", "")
+    region_list = body.get("region_list") or []
+    labels = [
+        regions.country_label(str(item.get("code", "")))
+        for item in region_list
+        if isinstance(item, dict)
+    ]
+    return f"HS {hs_code} · {len(labels)} nước: {', '.join(labels)}"
+
+
 def build_headers(cookie: str) -> dict[str, str]:
     """Build the required HTTP headers including the cookie."""
     return {
@@ -291,19 +362,30 @@ def fetch_page(
     raise RuntimeError(f"Hết số lần thử cho curPage={cur_page}")
 
 
-def save_page(items: list[Any], page: int, force: bool) -> bool:
-    """Write ``items`` to ``data/<page>.json``.
+def save_page(
+    items: list[Any],
+    page: int,
+    force: bool,
+    data_dir: Optional[Path] = None,
+) -> bool:
+    """Write ``items`` to ``<data_dir>/<page>.json``.
+
+    Args:
+        data_dir: Target folder; defaults to the module-level ``DATA_DIR``.
+            The web worker passes it explicitly so a background thread can
+            never write into a dataset that a newer job has switched to.
 
     Returns True if written, False if skipped because the file already exists.
     """
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    target = page_file_path(page)
+    target_dir = data_dir if data_dir is not None else DATA_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{page}.json"
     if target.exists() and not force:
-        logger.info("Bỏ qua data/%s.json (đã tồn tại).", page)
+        logger.info("Bỏ qua %s (đã tồn tại).", target)
         return False
     with target.open("w", encoding="utf-8") as fh:
         json.dump(items, fh, ensure_ascii=False, indent=2)
-    logger.info("Saved data/%s.json", page)
+    logger.info("Saved %s", target)
     return True
 
 
@@ -320,26 +402,55 @@ def handle_credit_error(cur_page: int) -> str:
     return cookie
 
 
-def load_state() -> Optional[dict[str, Any]]:
+def query_fingerprint(body: dict[str, Any]) -> str:
+    """Stable fingerprint of a search body (HS code + destination countries).
+
+    Stored in ``state.json`` so a resume never continues a crawl that used a
+    different query. Without this, switching from e.g. NL to VN would silently
+    skip pages whose JSON files belong to the previous search.
+    """
+    hs_code = str(body.get("hsCode", ""))
+    region_list = body.get("region_list") or []
+    codes = sorted(
+        {
+            str(item.get("code") or item.get("isoAlpha2") or "").upper()
+            for item in region_list
+            if isinstance(item, dict)
+        }
+    )
+    return f"{hs_code}|{','.join(codes)}"
+
+
+def load_state(state_path: Optional[Path] = None) -> Optional[dict[str, Any]]:
     """Return saved state (curPage + known total/crawled) from state.json."""
-    if not STATE_FILE.is_file():
+    state_file = state_path if state_path is not None else STATE_FILE
+    if not state_file.is_file():
         return None
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(state_file.read_text(encoding="utf-8"))
         cur_page = int(data["curPage"])
     except (ValueError, KeyError, json.JSONDecodeError):
-        logger.warning("state.json không hợp lệ, bỏ qua.")
+        logger.warning("%s không hợp lệ, bỏ qua.", state_file)
         return None
 
     def _as_int(key: str) -> Optional[int]:
         value = data.get(key)
         return value if isinstance(value, int) else None
 
-    return {"curPage": cur_page, "total": _as_int("total"), "crawled": _as_int("crawled")}
+    return {
+        "curPage": cur_page,
+        "total": _as_int("total"),
+        "crawled": _as_int("crawled"),
+        "query": data.get("query") if isinstance(data.get("query"), str) else None,
+    }
 
 
 def save_state(
-    cur_page: int, total: Optional[int] = None, crawled: Optional[int] = None
+    cur_page: int,
+    total: Optional[int] = None,
+    crawled: Optional[int] = None,
+    query: Optional[str] = None,
+    state_path: Optional[Path] = None,
 ) -> None:
     """Persist curPage (last completed page) + total/crawled counts to state.json."""
     payload: dict[str, Any] = {"curPage": cur_page, "updatedAt": _now_iso()}
@@ -347,12 +458,15 @@ def save_state(
         payload["total"] = total
     if crawled is not None:
         payload["crawled"] = crawled
-    STATE_FILE.write_text(json.dumps(payload), encoding="utf-8")
+    if query is not None:
+        payload["query"] = query
+    target = state_path if state_path is not None else STATE_FILE
+    target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def page_file_path(page: int) -> Path:
+def page_file_path(page: int, data_dir: Optional[Path] = None) -> Path:
     """Return the output path for a given page."""
-    return DATA_DIR / f"{page}.json"
+    return (data_dir if data_dir is not None else DATA_DIR) / f"{page}.json"
 
 
 def count_records_in_file(page: int) -> int:
@@ -381,12 +495,72 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--cookie-file", type=Path, default=None)
     parser.add_argument(
+        "--hs-code",
+        type=str,
+        default=DEFAULT_HS_CODE,
+        help="HS code cần tìm (mặc định: %(default)s)",
+    )
+    parser.add_argument(
+        "--region",
+        "--regions",
+        dest="regions",
+        action="append",
+        default=None,
+        metavar="COUNTRY",
+        help=(
+            "Quốc gia/vùng nhập hàng, lặp lại được: "
+            "--region NL --region VN (nhận mã ISO2/ISO3 hoặc tên nước)"
+        ),
+    )
+    parser.add_argument(
+        "--region-list",
+        type=str,
+        default=None,
+        help="Danh sách quốc gia phân tách bằng dấu phẩy, ví dụ: NL,VN,SG",
+    )
+    parser.add_argument(
         "--body",
         type=str,
         default=None,
-        help="Body JSON tùy chỉnh (mặc định: %s)" % json.dumps(DEFAULT_BODY),
+        help=(
+            "JSON body đầy đủ, ghi đè --hs-code/--region. "
+            'Ví dụ: \'{"hsCode":"090411","region_list":[{"code":"NL"}]}\''
+        ),
     )
     return parser.parse_args(argv)
+
+
+def build_body_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve the request body from CLI arguments (``--body`` wins)."""
+    if args.body:
+        try:
+            parsed = json.loads(args.body)
+        except json.JSONDecodeError as exc:
+            raise regions.RegionError(f"--body không phải JSON hợp lệ: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise regions.RegionError("--body phải là một JSON object")
+        if "hsCode" not in parsed and "region_list" not in parsed:
+            raise regions.RegionError("--body phải chứa hsCode và/hoặc region_list")
+        body = dict(parsed)
+        if "hsCode" in body:
+            body["hsCode"] = regions.validate_hs_code(body["hsCode"])
+        return body
+
+    region_values: list[str] = []
+    if args.regions:
+        region_values.extend(args.regions)
+    if args.region_list:
+        region_values.extend(
+            piece for piece in args.region_list.split(",") if piece.strip()
+        )
+    if not region_values:
+        region_values = list(DEFAULT_REGION_CODES)
+        logger.info(
+            "Chưa chọn --region, dùng mặc định %s. Hãy truyền --region để chọn nước.",
+            ",".join(DEFAULT_REGION_CODES),
+        )
+
+    return build_search_body(args.hs_code, region_values)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -395,12 +569,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     setup_logging()
     args = parse_args(argv)
 
-    body = DEFAULT_BODY
-    if args.body:
-        try:
-            body = json.loads(args.body)
-        except json.JSONDecodeError:
-            logger.error("--body không phải JSON hợp lệ, dùng body mặc định.")
+    try:
+        body = build_body_from_args(args)
+    except regions.RegionError as exc:
+        logger.error("Tham số tìm kiếm không hợp lệ: %s", exc)
+        return 2
+
+    logger.info("Điều kiện tìm kiếm: %s", describe_body(body))
 
     cookie_file = args.cookie_file
     if cookie_file is None and Path("cookies.txt").is_file():
@@ -414,8 +589,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     total_records: Optional[int] = None
     records_crawled = 0
     start_page = args.start_page
+    query = query_fingerprint(body)
 
     state = None if args.force else load_state()
+    if state is not None:
+        if state.get("query") and state["query"] != query:
+            logger.info(
+                "state.json thuộc truy vấn khác (%s), bỏ qua để không trộn dữ liệu.",
+                state["query"],
+            )
+            state = None
     if state is not None:
         resume_page = state["curPage"] + 1
         if resume_page > start_page:
@@ -429,7 +612,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
 
     cur_page = start_page
-    logger.info("Bắt đầu crawl từ curPage=%s", cur_page)
+    logger.info("Bắt đầu crawl từ curPage=%s (truy vấn: %s)", cur_page, query)
 
     if total_records is not None and records_crawled >= total_records:
         logger.info("Đã crawl đủ %s records, không cần chạy tiếp.", total_records)
@@ -438,7 +621,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     pages_saved = 0
 
     def on_sigint(signum: int, frame: Any) -> None:
-        save_state(cur_page, total_records, records_crawled)
+        save_state(cur_page, total_records, records_crawled, query)
         logger.info("Đã nhận Ctrl+C. Lưu state curPage=%s.", cur_page)
         raise KeyboardInterrupt
 
@@ -512,7 +695,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 total_records if total_records is not None else "?",
             )
 
-            save_state(cur_page, total_records, records_crawled)
+            save_state(cur_page, total_records, records_crawled, query)
 
             if isinstance(row_count, int) and row_count < args.per_page:
                 logger.info("Trang cuối (rowCount=%s).", row_count)
