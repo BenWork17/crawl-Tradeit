@@ -135,19 +135,49 @@
     }
     .helper { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 8px; }
     .mini { font-size: 12px; color: #8ca3bf; }
-    .dataset-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+    .dataset-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: end; }
     .dataset-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    .dataset-column { min-width: 0; }
+    .dataset-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .dataset-actions button { margin: 0; padding: 10px 14px; }
     .dataset-create {
       min-width: 150px; height: 46px; margin-top: 14px;
       background: linear-gradient(135deg, var(--accent-2), #ec4899);
     }
+    button.danger, .link-button.danger {
+      background: linear-gradient(135deg, #e11d48, var(--danger));
+      box-shadow: 0 10px 28px rgba(225, 29, 72, 0.24);
+    }
+    button.danger[disabled] { opacity: .55; cursor: not-allowed; }
     .modal-backdrop {
       position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
       padding: 20px; background: rgba(2, 6, 23, 0.72); backdrop-filter: blur(8px);
     }
-    .modal { width: min(460px, 100%); padding: 24px; border: 1px solid var(--panel-border); border-radius: 20px; background: var(--panel); box-shadow: 0 24px 80px rgba(2, 6, 23, .5); }
+    .modal { width: min(460px, 100%); padding: 24px; border: 1px solid var(--panel-border); border-radius: 20px; background: var(--panel); backdrop-filter: blur(18px); box-shadow: 0 24px 80px rgba(2, 6, 23, .5); }
+    .modal.wide { width: min(900px, 100%); max-height: min(86vh, 900px); display: flex; flex-direction: column; }
     .modal h2 { margin: 0 0 8px; }
+    /* ``.note`` is muted by design; inside a dialog the body copy carries the
+       key facts, so it has to stay readable in both themes. */
+    .modal .note { color: var(--text); opacity: .82; }
     .modal[hidden], .modal-backdrop[hidden] { display: none; }
+    .dataset-summary {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px; margin: 14px 0 4px;
+    }
+    .dataset-summary .stat .value { font-size: 20px; }
+    .dataset-view-body { overflow: auto; flex: 1 1 auto; min-height: 120px; padding-right: 4px; }
+    .danger-note { color: var(--danger); font-weight: 600; }
+    .dataset-view-table { width: 100%; border-collapse: collapse; min-width: 620px; }
+    .dataset-view-table th, .dataset-view-table td {
+      border-bottom: 1px solid rgba(51, 65, 85, 0.6); padding: 8px 10px; text-align: left; font-size: 13.5px;
+    }
+    .dataset-view-table th {
+      position: sticky; top: 0; background: var(--panel); color: var(--muted);
+      font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .dataset-view-table tr.is-selected { background: rgba(56, 189, 248, 0.12); }
+    .dataset-view-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .dataset-view-empty { padding: 18px; border: 1px dashed var(--panel-border); border-radius: 14px; color: var(--muted); background: var(--panel-soft); }
     .files { margin-top: 20px; }
     .file-list { max-height: 300px; overflow: auto; display: grid; gap: 8px; margin-top: 12px; }
     .file-row {
@@ -276,19 +306,25 @@
         </div>
 
         <div class="dataset-bar">
-          <div>
+          <div class="dataset-column">
             <label>Bộ dữ liệu đang chọn</label>
             <div class="dataset-picker">
               <select id="dataset_select"></select>
               <input id="dataset_name" name="dataset_name" type="hidden" value="{{ job.dataset_name }}">
               <button type="button" class="dataset-create" onclick="openDatasetModal()">+ Tạo bộ mới</button>
             </div>
+            <div class="dataset-actions">
+              <button type="button" id="dataset-download" class="secondary" onclick="downloadDataset()" title="Tải toàn bộ file JSON của bộ dữ liệu đang chọn">⬇ Tải bộ dữ liệu</button>
+              <button type="button" id="dataset-view" class="ghost" onclick="openDatasetView()" title="Xem chi tiết bộ dữ liệu đang chọn">👁 Xem bộ dữ liệu</button>
+              <button type="button" id="dataset-delete" class="danger" onclick="openDeleteDatasetModal()" title="Xóa bộ dữ liệu đang chọn">✕ Xóa bộ dữ liệu</button>
+            </div>
           </div>
         </div>
         <p class="note" style="margin-top: 8px;">Để trống tên bộ dữ liệu thì hệ thống tự đặt theo điều kiện tìm kiếm (ví dụ <code>nl-vn_090411</code>). Mỗi điều kiện khác nhau nên dùng bộ riêng.</p>
 
         <form method="post" action="/api/jobs" enctype="multipart/form-data" onsubmit="return confirmStart(event)">
-          <input type="hidden" id="form_dataset_name" name="dataset_name" value="{{ job.dataset_name }}">
+          <input type="hidden" id="form_dataset_name" name="dataset_name" value="">
+          <input type="hidden" id="form_dataset_explicit" name="dataset_explicit" value="0">
           <div class="upload-box">
             <label>File Excel danh sách tài khoản</label>
             <input id="accounts_file" name="accounts_file" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" required>
@@ -318,7 +354,7 @@
               </div>
             </div>
 
-            <label style="margin-top: 14px;">Quốc gia/vùng nhập hàng (region_list) <span class="req">*</span></label>
+            <label style="margin-top: 14px;">Quốc gia/vùng nhập hàng (destiCountryCode) <span class="req">*</span></label>
             <div class="region-toolbar">
               <div class="toolbar">
                 <button type="button" class="ghost small" onclick="quickSelect('nl_vn')">NL + VN</button>
@@ -338,7 +374,7 @@
                 <code id="payload-summary">— chưa đủ điều kiện —</code>
               </div>
               <details>
-                <summary>Xem JSON đầy đủ (region_list)</summary>
+                <summary>Xem JSON đầy đủ (body gửi TradeIT)</summary>
                 <pre id="payload-preview" class="payload">—</pre>
               </details>
             </div>
@@ -436,6 +472,43 @@
   </div>
 </div>
 
+<div id="dataset-view-modal" class="modal-backdrop" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="dataset-view-title">
+    <h2 id="dataset-view-title">Chi tiết bộ dữ liệu</h2>
+    <div id="dataset-view-note" class="note"></div>
+    <div id="dataset-view-summary" class="dataset-summary"></div>
+    <div class="dataset-view-body">
+      <div id="dataset-view-state" class="note" style="margin: 10px 0;"></div>
+      <div id="dataset-view-files"></div>
+    </div>
+    <div class="actions">
+      <button type="button" onclick="downloadDataset()">⬇ Tải bộ dữ liệu</button>
+      <button type="button" class="secondary" onclick="exportSelected()">Tải Excel .xlsx</button>
+      <button type="button" class="ghost" onclick="closeDatasetView()">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<div id="dataset-delete-modal" class="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dataset-delete-title">
+    <h2 id="dataset-delete-title">Xóa bộ dữ liệu</h2>
+    <p class="note">
+      Bạn đang chọn bộ dữ liệu <strong id="dataset-delete-name"></strong>.
+      Thao tác này sẽ xóa vĩnh viễn <strong id="dataset-delete-count">0</strong> file JSON
+      (khoảng <strong id="dataset-delete-records">0</strong> bản ghi) khỏi ổ đĩa và
+      không thể hoàn tác.
+    </p>
+    <p id="dataset-delete-warning" class="note danger-note" hidden></p>
+    <label for="dataset-delete-confirm">Gõ chính xác tên bộ dữ liệu để xác nhận</label>
+    <input id="dataset-delete-confirm" type="text" autocomplete="off" placeholder="">
+    <p id="dataset-delete-message" class="note"></p>
+    <div class="actions">
+      <button id="dataset-delete-confirm-button" type="button" class="danger" disabled onclick="deleteDataset()">Xóa vĩnh viễn</button>
+      <button type="button" class="secondary" onclick="closeDeleteDatasetModal()">Hủy</button>
+    </div>
+  </div>
+</div>
+
 <script>
   let editingDataset = '';
   let editingPage = null;
@@ -482,11 +555,22 @@
 
   let regionCatalog = { continents: [], countries: [], default: [], default_hs_code: '' };
   const selectedRegions = new Set();
+  // Only send a dataset name when the user actually picked one. The old code
+  // always posted the rendered "legacy" value, which made a new search reuse
+  // old pages and show stale results.
+  let datasetChosenExplicitly = false;
 
   function syncDatasetName() {
     const datasetInput = document.getElementById('dataset_name');
     const formDataset = document.getElementById('form_dataset_name');
-    formDataset.value = datasetInput.value.trim() || 'legacy';
+    const explicitInput = document.getElementById('form_dataset_explicit');
+    if (!datasetChosenExplicitly) {
+      formDataset.value = '';
+      if (explicitInput) explicitInput.value = '0';
+      return;
+    }
+    formDataset.value = datasetInput.value.trim() || '';
+    if (explicitInput) explicitInput.value = formDataset.value ? '1' : '0';
   }
 
   async function loadRegions() {
@@ -643,8 +727,8 @@
           return;
         }
         preview.textContent = JSON.stringify(data.body, null, 2);
-        const codes = data.body.region_list.map(r => r.code).join(', ');
-        summary.textContent = `hsCode=${data.body.hsCode} · region_list=[${codes}]`;
+        const desti = data.body.destiCountryCode || '';
+        summary.textContent = `hsCode=${data.body.hsCode} · destiCountryCode=${desti}`;
         message.textContent = data.label;
       } catch (err) {
         message.textContent = 'Không kiểm tra được payload.';
@@ -660,12 +744,12 @@
       return false;
     }
     if (!selectedRegions.size) {
-      alert('Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng (region_list).');
+      alert('Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng.');
       event.preventDefault();
       return false;
     }
 
-    // Post the selection the way TradeIT expects, plus the legacy fields.
+    // These codes become destiCountryCode (the importing countries).
     const form = event.target;
     form.querySelectorAll('input[name="region_codes"]').forEach(el => el.remove());
     [...selectedRegions].sort().forEach(code => {
@@ -691,14 +775,21 @@
     datasetSelect.addEventListener('change', async function() {
       if (datasetSelect.value !== '__custom__') {
         datasetInput.value = datasetSelect.value;
+        datasetChosenExplicitly = true;
+      } else {
+        datasetChosenExplicitly = false;
       }
+      syncDatasetName();
       await loadFiles();
     });
     datasetInput.addEventListener('change', async function() {
+      datasetChosenExplicitly = Boolean(datasetInput.value.trim());
+      syncDatasetName();
       await loadFiles();
     });
     document.getElementById('region_search').addEventListener('input', renderRegionList);
     document.getElementById('hs_code').addEventListener('input', updatePayloadPreview);
+    document.getElementById('dataset-delete-confirm').addEventListener('input', onDeleteConfirmInput);
   }
 
   function openDatasetModal() {
@@ -827,6 +918,9 @@
     } else {
       select.value = '__custom__';
     }
+    // Just opening the page must not mark the dataset as chosen by the user.
+    datasetChosenExplicitly = false;
+    syncDatasetName();
     document.getElementById('dataset_name_status').textContent = current;
     document.getElementById('current-dataset').textContent = `Đang xem bộ dữ liệu: ${current}`;
   }
@@ -947,8 +1041,187 @@
     form.submit();
   }
 
-  async function refreshStatus() {
-    const data = await fetch('/api/status').then(r => r.json());
+  function formatBytes(size) {
+    if (!size || size < 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = Number(size);
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
+  }
+
+  function formatNumber(value) {
+    return Number(value || 0).toLocaleString('vi-VN');
+  }
+
+  async function fetchDatasetSummary(dataset) {
+    const response = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/summary`);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Không đọc được thông tin bộ dữ liệu.');
+    }
+    return data;
+  }
+
+  // --- Tải bộ dữ liệu (ZIP toàn bộ file JSON) -------------------------------
+  function downloadDataset() {
+    const dataset = currentDataset();
+    // A plain navigation lets the browser stream the ZIP to disk; the backend
+    // answers 404 with JSON when the dataset has no page files yet.
+    window.location.href = `/api/datasets/${encodeURIComponent(dataset)}/download`;
+  }
+
+  // --- Xem bộ dữ liệu (chi tiết + chọn trang) ------------------------------
+  function openDatasetView() {
+    const dataset = currentDataset();
+    document.getElementById('dataset-view-modal').hidden = false;
+    document.getElementById('dataset-view-title').textContent = `Chi tiết bộ dữ liệu: ${dataset}`;
+    document.getElementById('dataset-view-note').textContent = 'Đang tải...';
+    document.getElementById('dataset-view-summary').innerHTML = '';
+    document.getElementById('dataset-view-state').textContent = '';
+    document.getElementById('dataset-view-files').innerHTML = '';
+    loadDatasetView(dataset);
+  }
+
+  async function loadDatasetView(dataset) {
+    const note = document.getElementById('dataset-view-note');
+    try {
+      const data = await fetchDatasetSummary(dataset);
+      note.textContent = data.legacy
+        ? 'Bộ dữ liệu mặc định (thư mục data/ ở gốc dự án).'
+        : `Thư mục: datasets/${data.name}`;
+      document.getElementById('dataset-view-summary').innerHTML = `
+        <div class="stat"><div class="label">Số file</div><div class="value">${formatNumber(data.file_count)}</div></div>
+        <div class="stat"><div class="label">Tổng bản ghi</div><div class="value">${formatNumber(data.records)}</div></div>
+        <div class="stat"><div class="label">Dung lượng</div><div class="value">${formatBytes(data.size)}</div></div>
+        <div class="stat"><div class="label">Trang lớn nhất</div><div class="value">${data.file_count ? formatNumber(data.files[data.files.length - 1].page) : '—'}</div></div>`;
+
+      const state = data.state || {};
+      const stateParts = [];
+      if (state.query) stateParts.push(`Điều kiện: <code>${escapeHtml(state.query)}</code>`);
+      if (state.curPage !== undefined) stateParts.push(`curPage: ${escapeHtml(state.curPage)}`);
+      if (state.total !== undefined) stateParts.push(`total: ${formatNumber(state.total)}`);
+      if (state.crawled !== undefined) stateParts.push(`crawled: ${formatNumber(state.crawled)}`);
+      document.getElementById('dataset-view-state').innerHTML = stateParts.length
+        ? stateParts.join(' · ')
+        : 'Chưa có state.json cho bộ dữ liệu này.';
+
+      const holder = document.getElementById('dataset-view-files');
+      if (!data.files.length) {
+        holder.innerHTML = '<div class="dataset-view-empty">Bộ dữ liệu này chưa có file JSON nào.</div>';
+        return;
+      }
+      const selected = new Set([...document.querySelectorAll('.file-choice:checked')].map(input => input.value));
+      let html = '<div class="table-wrap"><table class="dataset-view-table"><thead><tr>' +
+        '<th>Trang</th><th>File</th><th>Số bản ghi</th><th>Số cột</th><th>Dung lượng</th><th></th>' +
+        '</tr></thead><tbody>';
+      data.files.forEach(file => {
+        const isSelected = selected.has(String(file.page));
+        html += `<tr class="${isSelected ? 'is-selected' : ''}">
+          <td>${formatNumber(file.page)}</td>
+          <td><code>${escapeHtml(file.name)}</code></td>
+          <td class="num">${formatNumber(file.records)}</td>
+          <td class="num">${formatNumber(file.columns)}</td>
+          <td class="num">${formatBytes(file.size)}</td>
+          <td><button type="button" class="ghost small" onclick="viewPageFromModal(${file.page})">Xem / sửa</button></td>
+        </tr>`;
+      });
+      html += '</tbody></table></div>';
+      holder.innerHTML = html;
+    } catch (err) {
+      note.textContent = err.message || 'Không đọc được thông tin bộ dữ liệu.';
+    }
+  }
+
+  function closeDatasetView() {
+    document.getElementById('dataset-view-modal').hidden = true;
+  }
+
+  function viewPageFromModal(page) {
+    closeDatasetView();
+    openFile(page);
+  }
+
+  // --- Xóa bộ dữ liệu -------------------------------------------------------
+  let deleteTargetName = '';
+
+  async function openDeleteDatasetModal() {
+    const dataset = currentDataset();
+    const modal = document.getElementById('dataset-delete-modal');
+    const warning = document.getElementById('dataset-delete-warning');
+    const input = document.getElementById('dataset-delete-confirm');
+    const button = document.getElementById('dataset-delete-confirm-button');
+
+    deleteTargetName = dataset;
+    modal.hidden = false;
+    input.value = '';
+    button.disabled = true;
+    document.getElementById('dataset-delete-message').textContent = 'Đang kiểm tra...';
+    document.getElementById('dataset-delete-name').textContent = dataset;
+    document.getElementById('dataset-delete-count').textContent = '0';
+    document.getElementById('dataset-delete-records').textContent = '0';
+    warning.hidden = true;
+
+    try {
+      const data = await fetchDatasetSummary(dataset);
+      document.getElementById('dataset-delete-count').textContent = formatNumber(data.file_count);
+      document.getElementById('dataset-delete-records').textContent = formatNumber(data.records);
+      document.getElementById('dataset-delete-message').textContent = '';
+      if (data.legacy) {
+        warning.textContent = 'Đây là bộ dữ liệu mặc định: chỉ các file trang trong data/ và state.json bị xóa, cấu hình khác được giữ nguyên.';
+        warning.hidden = false;
+      }
+      input.placeholder = dataset;
+      input.focus();
+    } catch (err) {
+      document.getElementById('dataset-delete-message').textContent = err.message || 'Không kiểm tra được bộ dữ liệu.';
+    }
+  }
+
+  function closeDeleteDatasetModal() {
+    document.getElementById('dataset-delete-modal').hidden = true;
+    deleteTargetName = '';
+  }
+
+  function onDeleteConfirmInput() {
+    const input = document.getElementById('dataset-delete-confirm');
+    const button = document.getElementById('dataset-delete-confirm-button');
+    button.disabled = !deleteTargetName || input.value.trim() !== deleteTargetName;
+  }
+
+  async function deleteDataset() {
+    const name = deleteTargetName;
+    if (!name) return;
+    const button = document.getElementById('dataset-delete-confirm-button');
+    const message = document.getElementById('dataset-delete-message');
+    button.disabled = true;
+    message.textContent = 'Đang xóa...';
+    try {
+      const response = await fetch(`/api/datasets/${encodeURIComponent(name)}/delete`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) {
+        message.textContent = data.error || 'Không xóa được bộ dữ liệu.';
+        button.disabled = false;
+        return;
+      }
+      closeDeleteDatasetModal();
+      // Drop the editor: the page it shows may belong to the deleted dataset.
+      closeEditor();
+      // Fall back to the default dataset, which always exists.
+      document.getElementById('dataset_name').value = 'legacy';
+      await loadDatasets();
+      await loadFiles();
+      alert(data.message || 'Đã xóa bộ dữ liệu.');
+    } catch (err) {
+      message.textContent = 'Không xóa được bộ dữ liệu.';
+      button.disabled = false;
+    }
+  }
+
+  async function refreshStatus() {    const data = await fetch('/api/status').then(r => r.json());
     for (const key of ['status', 'page', 'records', 'message', 'account_label', 'query_label']) {
       const el = document.getElementById(key);
       if (el) el.textContent = data[key] || (key === 'query_label' ? '—' : (data[key] ?? '-'));

@@ -8,10 +8,6 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-GEO_TYPE_CONTINENT = "CONTINENT"
-GEO_TYPE_REGION = "REGION"
-GEO_TYPE_COUNTRY = "COUNTRY"
-
 # (code, English name, Vietnamese name)
 CONTINENTS: tuple[tuple[str, str, str], ...] = (
     ('AF', 'Africa', 'Châu Phi'),
@@ -466,45 +462,52 @@ def countries_in_continent_all() -> list[str]:
     return [row[0] for row in sorted(COUNTRIES, key=lambda item: item[2])]
 
 
-def build_region_list(codes: Iterable[str]) -> list[dict[str, Any]]:
-    """Build the ``region_list`` array used by the buyer-search request body.
+def build_destination_codes(codes: Iterable[str]) -> str:
+    """Build the comma-joined ``destiCountryCode`` value the API expects.
 
-    Each entry mirrors the geo model observed on the site
-    (``type``/``code``/``upCode``/``name``/``nameEn``/``isoCode``/``isoAlpha2``/
-    ``countryCode``).
+    The buyer-search request takes the importing countries as a single
+    comma-separated string of ISO-2 codes (e.g. ``"US,VN"``), not as an array
+    of objects. Order is preserved so the same user selection always produces
+    the same request.
+
+    Raises:
+        RegionError: If no usable country code remains.
     """
-    entries: list[dict[str, Any]] = []
-    for code in codes:
-        info = COUNTRY_BY_CODE.get(code)
-        if not info:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for raw in codes:
+        code = str(raw).strip().upper()
+        if not code or code in seen:
             continue
-        entries.append(
-            {
-                "type": GEO_TYPE_COUNTRY,
-                "code": code,
-                "upCode": info["continent"] or None,
-                "name": info["name_vi"],
-                "nameEn": info["name"],
-                "isoCode": info["iso3"],
-                "isoAlpha2": code,
-                "countryCode": code,
-            }
-        )
-    return entries
+        if code not in COUNTRY_BY_CODE:
+            raise RegionError(f"Mã quốc gia không hợp lệ: {raw}")
+        seen.add(code)
+        ordered.append(code)
+
+    if not ordered:
+        raise RegionError("Chưa chọn quốc gia/vùng nhập hàng nào")
+    return ",".join(ordered)
+
+
+def parse_destination_codes(value: str) -> list[str]:
+    """Split a ``destiCountryCode`` string back into ISO-2 codes."""
+    return [part.strip().upper() for part in str(value or "").split(",") if part.strip()]
 
 
 def validate_hs_code(value: str) -> str:
     """Normalise an HS code the way the site accepts it.
 
-    TradeIT accepts 2-10 digits (with optional leading chapter ``09``); dots and
-    spaces are stripped. Raises ``RegionError`` for anything else.
+    The site strips everything except digits and commas, and rejects a single
+    character (its own form warns below 2 characters). Dots and spaces are
+    removed here as a convenience.
+
+    Raises:
+        RegionError: For an empty code or fewer than 2 digits.
     """
     digits = "".join(ch for ch in str(value) if ch.isdigit())
     if not digits:
         raise RegionError("HS Code phải chứa chữ số (ví dụ: 090411)")
-    if len(digits) < 2 or len(digits) > 10:
-        raise RegionError(
-            f"HS Code phải từ 2 đến 10 chữ số (nhận được {len(digits)} chữ số)"
-        )
+    if len(digits) < 2:
+        raise RegionError("HS Code phải có ít nhất 2 chữ số (ví dụ: 09 hoặc 090411)")
     return digits
 

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import traceback
 import threading
 import time
+import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -197,15 +199,12 @@ def _list_datasets() -> list[dict[str, Any]]:
         if name in seen:
             continue
         seen.add(name)
+        data_dir = _dataset_data_dir(name)
         unique.append(
             {
                 "name": name,
                 "label": _dataset_display_name(name),
-                "files": len(list(_dataset_data_dir(name).glob("*.json")))
-                if _dataset_data_dir(name).is_dir()
-                else len(list(LEGACY_DATA_DIR.glob("*.json")))
-                if name == LEGACY_DATASET_NAME and LEGACY_DATA_DIR.is_dir()
-                else 0,
+                "files": len(list(data_dir.glob("*.json"))) if data_dir.is_dir() else 0,
             }
         )
     return unique
@@ -217,11 +216,175 @@ def _default_dataset_name(region_codes: list[str], hs_code: str) -> str:
     return _clean_name(f"{region_part}_{hs_code}")
 
 
+def _clean_dataset_name(name: str) -> str:
+    """Validate a dataset name without touching the filesystem."""
+    return LEGACY_DATASET_NAME if name == LEGACY_DATASET_NAME else _clean_name(name)
+
+
+def _require_dataset(name: str) -> str:
+    """Validate a dataset name and fail when that dataset does not exist.
+
+    Read-only routes must not call ``_ensure_dataset``: it creates folders, so a
+    mistyped name would silently produce an empty dataset instead of an error.
+    """
+    dataset = _clean_dataset_name(name)
+    if dataset == LEGACY_DATASET_NAME or _dataset_dir(dataset).is_dir():
+        return dataset
+    raise FileNotFoundError(f"Không tìm thấy bộ dữ liệu '{dataset}'")
+
+
 def _ensure_dataset(name: str) -> str:
-    dataset = _clean_name(name) if name != LEGACY_DATASET_NAME else LEGACY_DATASET_NAME
+    dataset = _clean_dataset_name(name)
     if dataset != LEGACY_DATASET_NAME:
         _dataset_data_dir(dataset).mkdir(parents=True, exist_ok=True)
     return dataset
+
+
+def _dataset_page_files(name: str) -> list[Path]:
+    """Return the ``<page>.json`` files of a dataset, ordered by page number."""
+    data_dir = _dataset_data_dir(name)
+    if not data_dir.is_dir():
+        return []
+    pages = [path for path in data_dir.glob("*.json") if merge_data.page_number(path) < 10**9]
+    return sorted(pages, key=merge_data.page_number)
+
+
+def _dataset_summary(name: str) -> dict[str, Any]:
+    """Build the record/files/size summary shown in the dataset dialog."""
+    files: list[dict[str, Any]] = []
+    total_records = 0
+    total_bytes = 0
+    for path in _dataset_page_files(name):
+        page = merge_data.page_number(path)
+        try:
+            payload = _read_page_in_dataset(name, page)
+            count = len(payload)
+            columns: set[str] = set()
+            for item in payload:
+                if isinstance(item, dict):
+                    columns.update(merge_data.flatten(item))
+        except (OSError, ValueError, json.JSONDecodeError):
+            count = 0
+            columns = set()
+        size = path.stat().st_size
+        total_records += count
+        total_bytes += size
+        files.append(
+            {
+                "page": page,
+                "name": path.name,
+                "records": count,
+                "size": size,
+                "columns": len(columns),
+                "updated_at": path.stat().st_mtime,
+            }
+        )
+
+    state = {}
+    query = _dataset_query(name)
+    if query is not None:
+        state["query"] = query
+    state_file = _dataset_state_file(name)
+    if state_file.is_file():
+        try:
+            saved = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            saved = {}
+        if isinstance(saved, dict):
+            for key in ("curPage", "total", "crawled", "updatedAt"):
+                if key in saved:
+                    state[key] = saved[key]
+
+    return {
+        "name": name,
+        "label": _dataset_display_name(name),
+        "legacy": name == LEGACY_DATASET_NAME,
+        "files": files,
+        "file_count": len(files),
+        "records": total_records,
+        "size": total_bytes,
+        "state": state,
+    }
+
+
+def _dataset_matches(dataset: str, name: str) -> bool:
+    """True when two user-supplied dataset names point at the same folder."""
+    try:
+        return _clean_name(dataset) == _clean_name(name)
+    except ValueError:
+        return dataset == name
+
+
+def _assert_dataset_idle(name: str) -> None:
+    """Refuse to delete a dataset that the running crawl is still writing to."""
+    with job_lock:
+        running = job.get("status") == "running"
+        current = str(job.get("dataset_name", ""))
+    if running and _dataset_matches(current, name):
+        raise ValueError(
+            "Bộ dữ liệu này đang được crawl. Hãy dừng job rồi mới xóa."
+        )
+
+
+def _delete_dataset(name: str) -> dict[str, Any]:
+    """Delete the crawled pages (and state) of one dataset.
+
+    ``legacy`` maps to the repository's ``data/`` folder and ``state.json``, so
+    only those files are removed; every other dataset loses its whole folder.
+    """
+    _assert_dataset_idle(name)
+    summary = _dataset_summary(name)
+
+    if name == LEGACY_DATASET_NAME:
+        removed_files = 0
+        for path in _dataset_page_files(name):
+            path.unlink()
+            removed_files += 1
+        # ``data.csv`` is a user export (and tracked by git), not crawl output:
+        # deleting the dataset must not throw that merge away.
+        if LEGACY_STATE_FILE.is_file():
+            LEGACY_STATE_FILE.unlink()
+    else:
+        removed_files = summary["file_count"]
+        target = _dataset_dir(name)
+        if target.is_dir():
+            shutil.rmtree(target)
+        # Keep the dataset list honest: an empty folder is not a dataset.
+        if DATASETS_ROOT.is_dir() and not any(DATASETS_ROOT.iterdir()):
+            DATASETS_ROOT.rmdir()
+
+    # The job panel would otherwise keep pointing at a folder that no longer
+    # exists, so falls back to the always-present default dataset.
+    with job_lock:
+        if _dataset_matches(str(job.get("dataset_name", "")), name):
+            job["dataset_name"] = LEGACY_DATASET_NAME
+
+    return {
+        "name": name,
+        "label": _dataset_display_name(name),
+        "removed_files": removed_files,
+        "removed_records": summary["records"],
+        "message": (
+            f"Đã xóa bộ dữ liệu '{_dataset_display_name(name)}' "
+            f"({removed_files} file, {summary['records']} bản ghi)."
+        ),
+    }
+
+
+def _zip_dataset(name: str) -> BytesIO:
+    """Pack every page file of a dataset (plus ``data.csv``) into a ZIP buffer."""
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in _dataset_page_files(name):
+            archive.write(path, arcname=f"data/{path.name}")
+        csv_file = _dataset_csv_file(name)
+        if csv_file.is_file():
+            archive.write(csv_file, arcname=csv_file.name)
+        state_file = _dataset_state_file(name)
+        if state_file.is_file() and name != LEGACY_DATASET_NAME:
+            archive.write(state_file, arcname="state.json")
+    buffer.seek(0)
+    return buffer
 
 
 def _set_crawler_paths(name: str) -> str:
@@ -232,17 +395,13 @@ def _set_crawler_paths(name: str) -> str:
 
 
 def _parse_region_selection(form: Any) -> list[str]:
-    """Read the region selector from the submitted form.
+    """Read the importing countries the user picked in the region list.
 
-    The UI posts ``region_codes`` (possibly several values) plus an optional
-    free-text ``region_text``. Both are resolved through ``regions``; when the
-    user picked nothing we refuse instead of falling back to a hardcoded
-    country.
+    The UI posts ``region_codes`` (possibly several values). These become the
+    ``destiCountryCode`` request field. When the user picked nothing we refuse
+    instead of falling back to a hardcoded country.
     """
-    raw: list[str] = []
-    for value in form.getlist("region_codes"):
-        raw.append(value)
-    raw.extend(form.getlist("region_list"))
+    raw: list[str] = [str(value) for value in form.getlist("region_codes")]
 
     free_text = str(form.get("region_text", "") or "").strip()
     if free_text:
@@ -257,7 +416,7 @@ def _parse_region_selection(form: Any) -> list[str]:
     cleaned = [value for value in raw if str(value).strip()]
     if not cleaned:
         raise regions.RegionError(
-            "Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng (region_list)."
+            "Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng."
         )
 
     codes, unknown = regions.resolve_region_codes(cleaned)
@@ -271,21 +430,18 @@ def _parse_region_selection(form: Any) -> list[str]:
 def _resolve_dataset_from_request(form: Any, body: dict[str, Any]) -> str:
     """Pick the dataset to write into.
 
-    An explicit dataset always wins; otherwise the name is derived from the
-    real query (countries + HS code) so two different searches never share one
-    folder by accident.
+    Only an explicitly chosen dataset (the ``__explicit__`` flag set by the
+    picker) is used as-is. Otherwise the name is derived from the real query
+    (countries + HS code), so a new search never lands in an old folder by
+    accident -- which previously made the dashboard show stale results.
     """
+    explicit = str(form.get("dataset_explicit", "") or "").strip() == "1"
     dataset_name = str(form.get("dataset_name", "") or "").strip()
-    if dataset_name and dataset_name != "__custom__":
+
+    if explicit and dataset_name and dataset_name != "__custom__":
         return dataset_name
 
-    codes = sorted(
-        {
-            str(item.get("code") or "").upper()
-            for item in body.get("region_list", [])
-            if isinstance(item, dict)
-        }
-    )
+    codes = regions.parse_destination_codes(body.get("destiCountryCode", ""))
     hs_code = str(body.get("hsCode") or "")
     return _default_dataset_name(codes, hs_code)
 
@@ -330,14 +486,25 @@ def _dataset_query(dataset: str) -> str | None:
 def _assert_dataset_matches_query(dataset: str, query: str, force: bool) -> None:
     """Refuse to mix pages crawled with a different query into one dataset.
 
-    Without this check, crawling VN into a folder that already holds NL pages
-    would skip those pages as "already done" and silently return NL data.
+    Without this check, crawling VN into a folder that already holds US pages
+    would skip those pages as "already done" and silently show the old data.
+
+    A folder that already contains pages but has no recorded query is treated as
+    *unknown*, not as a match: older crawls (before the query was stored) must
+    not be silently reused, otherwise a new search returns stale results.
     """
     if force:
         return
+    if not _dataset_page_files(dataset):
+        return
+
     previous = _dataset_query(dataset)
     if previous is None:
-        return
+        raise ValueError(
+            f"Bộ dữ liệu '{dataset}' đã có dữ liệu nhưng không rõ điều kiện tìm kiếm "
+            f"(bản crawl cũ). Hãy chọn/tạo bộ dữ liệu mới, hoặc tick "
+            f"'Crawl lại và ghi đè' để ghi đè lên dữ liệu cũ."
+        )
     if previous != query:
         raise ValueError(
             f"Bộ dữ liệu '{dataset}' đã crawl với điều kiện khác ({previous}). "
@@ -751,7 +918,13 @@ def search_preview():
         )
     except regions.RegionError as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify({"body": body, "label": crawler.describe_body(body)})
+    return jsonify(
+        {
+            "body": body,
+            "label": crawler.describe_body(body),
+            "desti_country_code": body["destiCountryCode"],
+        }
+    )
 
 
 @app.get("/api/datasets")
@@ -778,6 +951,57 @@ def create_dataset():
     ), 201
 
 
+@app.get("/api/datasets/<dataset>/summary")
+def dataset_summary(dataset: str):
+    """Detail view for one dataset: pages, records, size and saved state."""
+    try:
+        name = _require_dataset(dataset)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    return jsonify(_dataset_summary(name))
+
+
+@app.get("/api/datasets/<dataset>/download")
+def download_dataset(dataset: str):
+    """Download every page file of a dataset as one ZIP archive."""
+    try:
+        name = _require_dataset(dataset)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    if not _dataset_page_files(name):
+        return jsonify({"error": "Bộ dữ liệu này chưa có file nào để tải"}), 404
+    return send_file(
+        _zip_dataset(name),
+        as_attachment=True,
+        download_name=f"{name}-json.zip",
+        mimetype="application/zip",
+    )
+
+
+@app.post("/api/datasets/<dataset>/delete")
+def delete_dataset(dataset: str):
+    """Delete one dataset (irreversible)."""
+    # Deliberately resolved without ``_ensure_dataset``: validating the name must
+    # not create the folder that is about to be removed.
+    try:
+        name = _require_dataset(dataset)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    try:
+        result = _delete_dataset(name)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except OSError as exc:
+        return jsonify({"error": f"Không xóa được bộ dữ liệu: {exc}"}), 500
+    return jsonify(result)
+
+
 @app.get("/api/files")
 def list_files():
     dataset_name = request.args.get("dataset", "").strip()
@@ -785,28 +1009,24 @@ def list_files():
         with job_lock:
             dataset_name = str(job.get("dataset_name", LEGACY_DATASET_NAME))
     dataset_name = _ensure_dataset(dataset_name)
-    data_dir = _dataset_data_dir(dataset_name)
     files = []
-    if data_dir.is_dir():
-        for path in sorted(data_dir.glob("*.json"), key=merge_data.page_number):
-            page = merge_data.page_number(path)
-            if page >= 10**9:
-                continue
-            try:
-                count = len(_read_page_in_dataset(dataset_name, page))
-                size = path.stat().st_size
-                updated_at = path.stat().st_mtime
-            except (OSError, ValueError, json.JSONDecodeError):
-                count, size, updated_at = 0, path.stat().st_size, None
-            files.append(
-                {
-                    "page": page,
-                    "name": path.name,
-                    "records": count,
-                    "size": size,
-                    "updated_at": updated_at,
-                }
-            )
+    for path in _dataset_page_files(dataset_name):
+        page = merge_data.page_number(path)
+        try:
+            count = len(_read_page_in_dataset(dataset_name, page))
+            size = path.stat().st_size
+            updated_at = path.stat().st_mtime
+        except (OSError, ValueError, json.JSONDecodeError):
+            count, size, updated_at = 0, path.stat().st_size, None
+        files.append(
+            {
+                "page": page,
+                "name": path.name,
+                "records": count,
+                "size": size,
+                "updated_at": updated_at,
+            }
+        )
     return jsonify(files)
 
 

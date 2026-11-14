@@ -98,24 +98,29 @@ không bao giờ ghi chung một thư mục.
 Nếu bạn cố ghi một điều kiện mới vào bộ dữ liệu đã crawl bằng điều kiện khác,
 ứng dụng sẽ **từ chối** và yêu cầu tạo bộ mới (hoặc tick *Crawl lại và ghi đè*).
 
-### Điều kiện tìm kiếm (HS Code + region_list)
+### Điều kiện tìm kiếm (HS Code + quốc gia nhập hàng)
 
-Form gửi lên TradeIT đúng hai trường của trang buyer-search:
+Form gửi lên TradeIT đúng body mà trang buyer-search thật sử dụng:
 
 | Trường | Ý nghĩa |
 |--------|---------|
-| `hsCode` | Mã HS cần tìm (2–10 chữ số; dấu chấm/khoảng trắng được tự bỏ) |
-| `region_list` | Mảng quốc gia/vùng **nhập hàng**; mỗi phần tử có `type`, `code`, `isoCode`, `isoAlpha2`, `name`, `nameEn`, `upCode`, `countryCode` |
+| `searchBase` | Luôn `0` (giữ cho giống web gốc) |
+| `hsCode` | Mã HS cần tìm (ít nhất 2 chữ số; dấu chấm/khoảng trắng được tự bỏ) |
+| `productKeyword` | Từ khoá sản phẩm (mặc định rỗng) |
+| `buyerName` / `supplierName` | Lọc theo tên công ty (mặc định rỗng) |
+| `destiCountryCode` | **Quốc gia nhập hàng** — chuỗi ISO-2 phân tách bằng dấu phẩy, ví dụ `"US,VN"`. Đây chính là các nước bạn chọn trong danh sách. |
+| `originclCountryCode` | Quốc gia xuất hàng (mặc định rỗng). Chú ý: tên trường có typo `origincl` đúng như web gốc. |
+| `startDate` / `endDate` | Khoảng thời gian (mặc định rỗng) |
+
+> **Quan trọng:** API **không** nhận trường `region_list`. Bản trước gửi
+> `region_list` dạng mảng object nên server bỏ qua hoàn toàn, kết quả trả về mọi
+> nước (US chiếm đa số) — đó là lý do bạn thấy dữ liệu "mặc định US".
+> Hiện code gửi `destiCountryCode` đúng schema và lấy đúng từ lựa chọn của bạn.
 
 Chọn quốc gia bằng danh sách có ô tìm kiếm, chọn nhanh theo châu lục (checkbox ở
 tiêu đề nhóm), hoặc các nút **NL + VN**, **Toàn EU**, **ASEAN**. Khung
 *Body gửi lên TradeIT* hiển thị chính xác JSON sẽ POST, nên bạn kiểm tra được
 trước khi tốn credit.
-
-> **Lưu ý quan trọng:** bản cũ hardcode `{"importer": "netherland", "hsCode": "090411"}`
-> và bỏ qua lựa chọn của người dùng, nên mọi lần crawl đều tìm cho Hà Lan. Hiện
-> trường `importer` đã bị loại bỏ hoàn toàn; chỉ `hsCode` + `region_list` được gửi,
-> và chúng lấy đúng từ form.
 
 Web sẽ crawl tuần tự từng account, tự bỏ qua trang đã có trong bộ dữ liệu đó và
 gộp kết quả cuối cùng thành một file Excel duy nhất.
@@ -124,6 +129,29 @@ gộp kết quả cuối cùng thành một file Excel duy nhất.
 không nên bật debug hoặc chia sẻ URL dashboard công khai nếu chưa thêm lớp đăng nhập.
 Các file `data/`, `state.json` và file Excel trên hosting miễn phí có thể mất khi
 container khởi động lại; hãy dùng persistent disk hoặc tải file sau mỗi phiên.
+
+### Tải, xem và xóa bộ dữ liệu
+
+Ngay dưới ô chọn **Bộ dữ liệu đang chọn** có ba nút thao tác trên đúng bộ đang chọn:
+
+| Nút | Việc gì xảy ra |
+|-----|----------------|
+| **⬇ Tải bộ dữ liệu** | Tải một file ZIP chứa toàn bộ `data/<trang>.json` của bộ đó (kèm `state.json` và `data.csv` nếu có). Bộ rỗng trả về lỗi 404 thay vì tải file trống. |
+| **👁 Xem bộ dữ liệu** | Mở hộp thoại chi tiết: số file, tổng bản ghi, dung lượng, trang lớn nhất, điều kiện tìm kiếm đã lưu trong `state.json` và bảng từng trang (số bản ghi, số cột, dung lượng). Bấm **Xem / sửa** trên một dòng để mở bảng chỉnh sửa của trang đó. |
+| **✕ Xóa bộ dữ liệu** | Xóa vĩnh viễn dữ liệu của bộ đang chọn. Phải gõ lại đúng tên bộ dữ liệu để nút **Xóa vĩnh viễn** bật lên; hộp thoại hiển thị trước số file và số bản ghi sẽ mất. |
+
+Chi tiết cách xóa:
+
+- Bộ thường: xóa cả thư mục `datasets/<tên>/`. Thư mục `datasets/` rỗng cũng được
+  dọn luôn để danh sách bộ dữ liệu không còn dòng trống.
+- Bộ **Mặc định (legacy)**: chỉ xóa `data/*.json` và `state.json`. `data.csv` là file
+  bạn tự gộp (và đang được git theo dõi) nên **được giữ nguyên**.
+- Không xóa được bộ đang được crawl: API trả về `409` kèm thông báo dừng job trước.
+- Sau khi xóa, dashboard tự chuyển về bộ **Mặc định (legacy)** và tải lại danh sách file.
+
+Các thao tác này tương ứng với ba endpoint: `GET /api/datasets/<tên>/download`,
+`GET /api/datasets/<tên>/summary` và `POST /api/datasets/<tên>/delete`. Cả ba đều
+kiểm tra tên bộ dữ liệu và không tạo thư mục mới chỉ vì bị gọi.
 
 ### Xem và chọn file trên web
 
@@ -142,6 +170,7 @@ dạng text để hạn chế Excel tự đổi mã HS, số 0 đầu hoặc ng�
 - Có nút đổi sáng/tối ngay trên dashboard.
 - Phần xem file đã crawl hiển thị theo bảng, sửa từng ô rồi lưu lại.
 - Có nút **Tạo bộ dữ liệu mới** riêng, không cần nhập tên dataset trong form crawl.
+- Bộ dữ liệu đang chọn có thêm ba nút **Tải / Xem / Xóa** ngay dưới ô chọn.
 - Giao diện dùng typography `DM Sans` cho nội dung và `Space Grotesk` cho tiêu đề,
   tự responsive trên màn hình nhỏ.
 
@@ -158,7 +187,7 @@ dạng text để hạn chế Excel tự đổi mã HS, số 0 đầu hoặc ng�
 | `--hs-code CODE` | `090411` | HS Code cần tìm |
 | `--region NAME` | `NL` | Quốc gia/vùng nhập hàng; lặp lại được (`--region NL --region VN`) |
 | `--region-list "NL,VN"` | None | Nhiều quốc gia, phân tách bằng dấu phẩy |
-| `--body JSON` | None | Ghi đè toàn bộ body (`hsCode` + `region_list`) |
+| `--body JSON` | None | Ghi đè toàn bộ body (`hsCode` + `destiCountryCode`) |
 
 `--region` nhận mã ISO2 (`VN`), ISO3 (`VNM`), tên tiếng Anh (`Vietnam`), tên
 tiếng Việt (`Việt Nam`), tên châu lục (`Asia`, `Châu Á`) hoặc `all`.
@@ -176,7 +205,7 @@ python tradeit_crawler.py --hs-code 090411 --region Asia
 ```
 project/
 ├── tradeit_crawler.py   # crawl
-├── regions.py           # danh mục quốc gia/vùng + dựng region_list
+├── regions.py           # danh mục quốc gia/vùng + dựng destiCountryCode
 ├── merge_data.py        # gộp data/*.json -> CSV
 ├── cookies.txt
 ├── data/            # <curPage>.json

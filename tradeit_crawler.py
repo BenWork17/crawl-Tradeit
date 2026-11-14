@@ -207,20 +207,36 @@ def log_cookie_used(cookie: str) -> None:
 def build_search_body(
     hs_code: str,
     region_codes: Any,
+    *,
+    product_keyword: str = "",
+    buyer_name: str = "",
+    supplier_name: str = "",
+    origin_codes: Any = None,
+    start_date: str = "",
+    end_date: str = "",
+    search_base: int = 0,
 ) -> dict[str, Any]:
-    """Build the buyer-search request body from user input.
+    """Build the buyer-search request body exactly as the TradeIT site does.
+
+    The site's own search form posts this shape::
+
+        {searchBase, hsCode, productKeyword, buyerName, supplierName,
+         originclCountryCode, destiCountryCode, startDate, endDate}
+
+    Note the two country fields are **comma-separated ISO-2 strings**, not
+    arrays, and ``originclCountryCode`` really is spelled that way (sic).
+    ``destiCountryCode`` is the importing country, i.e. the countries the user
+    picked in the region list.
 
     Args:
         hs_code: HS code typed by the user (dots/spaces tolerated).
-        region_codes: Country names/codes, or the raw ``region_list`` array
-            (list of dicts) already prepared by the caller.
-
-    Returns:
-        The JSON body to POST, containing ``hsCode`` and ``region_list``.
+        region_codes: Countries the user selected, as names or codes. Becomes
+            ``destiCountryCode``.
+        origin_codes: Optional export countries, becomes ``originclCountryCode``.
 
     Raises:
-        regions.RegionError: When the HS code or the region selection is
-            unusable. Nothing is guessed and no country is defaulted in.
+        regions.RegionError: When the HS code or country selection is unusable.
+            Nothing is defaulted in.
     """
     normalized_hs = regions.validate_hs_code(hs_code)
 
@@ -231,41 +247,48 @@ def build_search_body(
     else:
         raise regions.RegionError("Danh sách quốc gia/vùng không hợp lệ")
 
-    if raw_values and all(isinstance(item, dict) for item in raw_values):
-        codes = [
-            str(item.get("code") or item.get("isoAlpha2") or "").upper()
-            for item in raw_values
-        ]
-        codes = [code for code in codes if code]
-        if not codes:
-            raise regions.RegionError("Danh sách quốc gia/vùng rỗng")
-        region_list = [
-            item for item in raw_values if str(item.get("code") or "").upper() in codes
-        ]
-    else:
-        codes, unknown = regions.resolve_region_codes(
-            [str(item) for item in raw_values]
+    # Accept the raw destiCountryCode string too (e.g. "US,VN").
+    codes, unknown = regions.resolve_region_codes([str(item) for item in raw_values])
+    if unknown:
+        logger.warning("Bỏ qua quốc gia không nhận diện được: %s", ", ".join(unknown))
+
+    desti = regions.build_destination_codes(codes)
+
+    origin = ""
+    if origin_codes:
+        raw_origin = [origin_codes] if isinstance(origin_codes, str) else list(origin_codes)
+        origin_list, origin_unknown = regions.resolve_region_codes(
+            [str(item) for item in raw_origin]
         )
-        if unknown:
-            logger.warning("Bỏ qua quốc gia không nhận diện được: %s", ", ".join(unknown))
-        region_list = regions.build_region_list(codes)
+        if origin_unknown:
+            logger.warning(
+                "Bỏ qua nước xuất không nhận diện được: %s", ", ".join(origin_unknown)
+            )
+        origin = regions.build_destination_codes(origin_list)
 
-    if not region_list:
-        raise regions.RegionError("Chưa chọn quốc gia/vùng nào để tìm")
-
-    return {"hsCode": normalized_hs, "region_list": region_list}
+    return {
+        "searchBase": int(search_base),
+        "hsCode": normalized_hs,
+        "productKeyword": str(product_keyword or "").strip(),
+        "buyerName": str(buyer_name or "").strip(),
+        "supplierName": str(supplier_name or "").strip(),
+        "originclCountryCode": origin,
+        "destiCountryCode": desti,
+        "startDate": str(start_date or "").strip(),
+        "endDate": str(end_date or "").strip(),
+    }
 
 
 def describe_body(body: dict[str, Any]) -> str:
     """Short human-readable summary of a search body, for logs/UI."""
     hs_code = body.get("hsCode", "")
-    region_list = body.get("region_list") or []
-    labels = [
-        regions.country_label(str(item.get("code", "")))
-        for item in region_list
-        if isinstance(item, dict)
-    ]
-    return f"HS {hs_code} · {len(labels)} nước: {', '.join(labels)}"
+    desti = regions.parse_destination_codes(body.get("destiCountryCode", ""))
+    labels = [regions.country_label(code) for code in desti]
+    origin = regions.parse_destination_codes(body.get("originclCountryCode", ""))
+    if origin:
+        origin_label = ", ".join(regions.country_label(code) for code in origin)
+        return f"HS {hs_code} · nhập: {', '.join(labels)} · xuất: {origin_label}"
+    return f"HS {hs_code} · {len(labels)} nước nhập: {', '.join(labels)}"
 
 
 def build_headers(cookie: str) -> dict[str, str]:
@@ -410,15 +433,14 @@ def query_fingerprint(body: dict[str, Any]) -> str:
     skip pages whose JSON files belong to the previous search.
     """
     hs_code = str(body.get("hsCode", ""))
-    region_list = body.get("region_list") or []
-    codes = sorted(
-        {
-            str(item.get("code") or item.get("isoAlpha2") or "").upper()
-            for item in region_list
-            if isinstance(item, dict)
-        }
-    )
-    return f"{hs_code}|{','.join(codes)}"
+    desti = regions.parse_destination_codes(body.get("destiCountryCode", ""))
+    origin = regions.parse_destination_codes(body.get("originclCountryCode", ""))
+    # Sort so the same country set always fingerprints the same way, even if
+    # the user picked them in a different order.
+    core = f"{hs_code}|{','.join(sorted(desti))}"
+    if origin:
+        core += f"|from:{','.join(sorted(origin))}"
+    return core
 
 
 def load_state(state_path: Optional[Path] = None) -> Optional[dict[str, Any]]:
@@ -524,7 +546,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=None,
         help=(
             "JSON body đầy đủ, ghi đè --hs-code/--region. "
-            'Ví dụ: \'{"hsCode":"090411","region_list":[{"code":"NL"}]}\''
+            'Ví dụ: \'{"hsCode":"090411","destiCountryCode":"NL,VN"}\''
         ),
     )
     return parser.parse_args(argv)
@@ -539,12 +561,24 @@ def build_body_from_args(args: argparse.Namespace) -> dict[str, Any]:
             raise regions.RegionError(f"--body không phải JSON hợp lệ: {exc}") from exc
         if not isinstance(parsed, dict):
             raise regions.RegionError("--body phải là một JSON object")
-        if "hsCode" not in parsed and "region_list" not in parsed:
-            raise regions.RegionError("--body phải chứa hsCode và/hoặc region_list")
-        body = dict(parsed)
-        if "hsCode" in body:
-            body["hsCode"] = regions.validate_hs_code(body["hsCode"])
-        return body
+        if "hsCode" not in parsed and "destiCountryCode" not in parsed:
+            raise regions.RegionError(
+                "--body phải chứa hsCode và/hoặc destiCountryCode"
+            )
+        # Normalise into the canonical shape so the fingerprint is stable.
+        return build_search_body(
+            parsed.get("hsCode", DEFAULT_HS_CODE),
+            regions.parse_destination_codes(parsed.get("destiCountryCode", "")),
+            product_keyword=parsed.get("productKeyword", ""),
+            buyer_name=parsed.get("buyerName", ""),
+            supplier_name=parsed.get("supplierName", ""),
+            origin_codes=regions.parse_destination_codes(
+                parsed.get("originclCountryCode", "")
+            ),
+            start_date=parsed.get("startDate", ""),
+            end_date=parsed.get("endDate", ""),
+            search_base=parsed.get("searchBase", 0) or 0,
+        )
 
     region_values: list[str] = []
     if args.regions:
