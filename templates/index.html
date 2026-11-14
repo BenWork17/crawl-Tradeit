@@ -1067,10 +1067,20 @@
   }
 
   // --- Tải bộ dữ liệu (ZIP toàn bộ file JSON) -------------------------------
-  function downloadDataset() {
+  async function downloadDataset() {
     const dataset = currentDataset();
-    // A plain navigation lets the browser stream the ZIP to disk; the backend
-    // answers 404 with JSON when the dataset has no page files yet.
+    // The file list already knows whether this dataset has pages, so stop here
+    // instead of navigating the tab onto the API's JSON 404 page.
+    if (!document.querySelector('.file-choice')) {
+      const hasFiles = await fetch(`/api/files?dataset=${encodeURIComponent(dataset)}`)
+        .then(response => response.ok ? response.json() : [])
+        .then(files => Array.isArray(files) && files.length > 0)
+        .catch(() => false);
+      if (!hasFiles) {
+        alert(`Bộ dữ liệu "${dataset}" chưa có file nào để tải.`);
+        return;
+      }
+    }
     window.location.href = `/api/datasets/${encodeURIComponent(dataset)}/download`;
   }
 
