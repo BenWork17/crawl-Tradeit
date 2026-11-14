@@ -873,28 +873,32 @@ def status():
 
 @app.get("/api/regions")
 def list_regions():
-    """Country/continent catalog for the region picker."""
+    """Country catalog for the region picker.
+
+    Mirrors the TradeIT buyer-search picker: five groups in the site's order,
+    195 countries, the site's English labels and a flag for each.
+    """
     return jsonify(
         {
-            "continents": [
+            "groups": [
                 {
-                    "code": code,
+                    "code": group_code,
                     "name": name,
                     "name_vi": name_vi,
-                    "countries": regions.countries_in_continent(code),
+                    "countries": regions.countries_in_group(group_code),
                 }
-                for code, name, name_vi in regions.CONTINENTS
+                for group_code, name, name_vi, _members in regions.GROUPS
             ],
             "countries": [
                 {
-                    "code": row[0],
-                    "iso3": row[1],
-                    "name": row[2],
-                    "name_vi": row[3],
-                    "continent": row[4],
-                    "region": row[5],
+                    "code": code,
+                    "name": name_en,
+                    "name_vi": name_vi,
+                    "group": group_code,
+                    "flag": regions.flag_url(code),
+                    "emoji": regions.flag_emoji(code),
                 }
-                for row in regions.COUNTRIES
+                for code, name_en, name_vi, group_code in regions.COUNTRIES
             ],
             "default": list(crawler.DEFAULT_REGION_CODES),
             "default_hs_code": crawler.DEFAULT_HS_CODE,

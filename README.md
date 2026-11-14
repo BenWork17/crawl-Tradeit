@@ -117,10 +117,32 @@ Form gửi lên TradeIT đúng body mà trang buyer-search thật sử dụng:
 > nước (US chiếm đa số) — đó là lý do bạn thấy dữ liệu "mặc định US".
 > Hiện code gửi `destiCountryCode` đúng schema và lấy đúng từ lựa chọn của bạn.
 
-Chọn quốc gia bằng danh sách có ô tìm kiếm, chọn nhanh theo châu lục (checkbox ở
+Chọn quốc gia bằng danh sách có ô tìm kiếm, chọn nhanh theo nhóm (checkbox ở
 tiêu đề nhóm), hoặc các nút **NL + VN**, **Toàn EU**, **ASEAN**. Khung
 *Body gửi lên TradeIT* hiển thị chính xác JSON sẽ POST, nên bạn kiểm tra được
 trước khi tốn credit.
+
+### Danh sách quốc gia
+
+Danh sách trong `regions.py` **khớp 1-1 với picker của web gốc**: đúng 195 quốc
+gia, chia 5 nhóm theo đúng thứ tự và đúng nhãn tiếng Anh của site:
+
+| Nhóm | Số quốc gia |
+|------|-------------|
+| America | 34 |
+| Asia | 47 |
+| Africa | 55 |
+| Oceania | 14 |
+| Europe | 45 |
+
+Mỗi dòng có **cờ** (lấy từ `flagcdn.com`, có emoji dự phòng khi offline) và nhãn
+tiếng Việt. Những vùng lãnh thổ **không** có trên web gốc (South Georgia, Macau,
+Puerto Rico, Guernsey, Bắc Triều Tiên...) cũng không được đưa vào, để lựa chọn
+không bao giờ tạo ra truy vấn mà site không hỗ trợ. Kosovo (`XK`) có trong danh
+sách dù không thuộc ISO-3166.
+
+Ô tìm kiếm lọc theo cả tên tiếng Anh, tiếng Việt và mã ISO. Gõ `Asia`,
+`Châu Á` hoặc `all` để chọn cả nhóm.
 
 Web sẽ crawl tuần tự từng account, tự bỏ qua trang đã có trong bộ dữ liệu đó và
 gộp kết quả cuối cùng thành một file Excel duy nhất.
