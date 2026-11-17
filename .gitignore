@@ -8,6 +8,26 @@ venv/
 datasets/
 *.xlsx
 
+# AgentTeams working state
+.agent-teams/
+
 # Secrets: never commit cookie files or env config
 cookies.txt
 .env
+
+# Cached account list written by accounts_store.py (contains auth tokens!)
+# Default location is datasets/accounts.json; these cover custom locations.
+accounts.json
+datasets/accounts.json
+data/accounts.json
+.accounts-*.tmp
+
+# Stray output from local test runs of the dev server (`python web_app.py`,
+# harness redirects like `_srv.err`). Never part of the app.
+_srv.*
+_cap_*
+_cap-*
+_conc_run/
+_corr_run/
+_lock_run/
+_jscheck*.js

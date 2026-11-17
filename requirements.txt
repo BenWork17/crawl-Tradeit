@@ -2,3 +2,11 @@ requests>=2.31.0
 Flask>=3.0.0
 openpyxl>=3.1.0
 gunicorn>=21.2.0; platform_system != "Windows"
+
+# Supabase lưu danh sách tài khoản (tùy chọn) dùng REST/PostgREST qua `requests`
+# ở trên — không cần thêm package nào. Cố ý KHÔNG dùng supabase-py: nó kéo theo
+# nhiều dependency (gotrue, postgrest, storage, realtime...) trong khi ở đây chỉ
+# cần 2 lời gọi HTTP (GET/POST một dòng jsonb). Xem accounts_store.py.
+#
+# `import accounts_store` không import `requests` ở top-level: module vẫn import
+# được khi chưa cài gì và chưa cấu hình Supabase.

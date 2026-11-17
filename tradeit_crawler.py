@@ -31,11 +31,11 @@ import regions
 
 BASE_URL = "https://www.tradeit.global/api/crm/bl/search"
 
-# The search body must always be built from the user's input. The old
-# module-level default leaked ``{"importer": "netherland", ...}`` into every
-# request, so a query for another country silently searched the Netherlands.
-DEFAULT_HS_CODE = "090411"
-DEFAULT_REGION_CODES: tuple[str, ...] = ("NL",)
+# The search body is always built from explicit user input. A module-level
+# default used to leak ``{"importer": "netherland", ...}`` into every request,
+# so a query for another country silently searched the Netherlands (and every
+# crawl silently used HS 090411). Nothing defaults to a country or an HS code
+# any more: the CLI and the web form both refuse to guess one.
 
 DATA_DIR = Path("data")
 LOG_DIR = Path("logs")
@@ -508,7 +508,13 @@ def count_existing_files() -> int:
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    """Parse command-line arguments."""
+    """Parse command-line arguments.
+
+    ``--hs-code`` and ``--region``/``--region-list`` are mandatory unless a
+    complete ``--body`` is supplied: the crawler must never invent a country or
+    an HS code the user did not choose (it used to silently crawl NL/090411).
+    Missing input is reported as an argparse usage error.
+    """
     parser = argparse.ArgumentParser(description="TradeIT buyer-search crawler")
     parser.add_argument("--start-page", type=int, default=1)
     parser.add_argument("--end-page", type=int, default=None)
@@ -519,8 +525,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--hs-code",
         type=str,
-        default=DEFAULT_HS_CODE,
-        help="HS code cần tìm (mặc định: %(default)s)",
+        default=None,
+        help=(
+            "HS code cần tìm (bắt buộc, trừ khi dùng --body). "
+            'Ví dụ: --hs-code 090411'
+        ),
     )
     parser.add_argument(
         "--region",
@@ -530,8 +539,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=None,
         metavar="COUNTRY",
         help=(
-            "Quốc gia/vùng nhập hàng, lặp lại được: "
-            "--region NL --region VN (nhận mã ISO2/ISO3 hoặc tên nước)"
+            "Quốc gia/vùng nhập hàng (bắt buộc, trừ khi dùng --body), "
+            "lặp lại được: --region NL --region VN (nhận mã ISO2/ISO3 hoặc tên nước)"
         ),
     )
     parser.add_argument(
@@ -545,11 +554,26 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "JSON body đầy đủ, ghi đè --hs-code/--region. "
+            "JSON body đầy đủ, thay cho --hs-code/--region. "
             'Ví dụ: \'{"hsCode":"090411","destiCountryCode":"NL,VN"}\''
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    if not args.body:
+        missing = []
+        if not str(args.hs_code or "").strip():
+            missing.append("--hs-code")
+        if not args.regions and not args.region_list:
+            missing.append("--region")
+        if missing:
+            parser.error(
+                "thiếu tham số bắt buộc: "
+                + ", ".join(missing)
+                + " (không có giá trị mặc định cho quốc gia hay HS code)"
+            )
+
+    return args
 
 
 def build_body_from_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -566,8 +590,10 @@ def build_body_from_args(args: argparse.Namespace) -> dict[str, Any]:
                 "--body phải chứa hsCode và/hoặc destiCountryCode"
             )
         # Normalise into the canonical shape so the fingerprint is stable.
+        # Nothing is substituted for a missing field: an absent hsCode stays
+        # absent and build_search_body rejects it.
         return build_search_body(
-            parsed.get("hsCode", DEFAULT_HS_CODE),
+            parsed.get("hsCode", ""),
             regions.parse_destination_codes(parsed.get("destiCountryCode", "")),
             product_keyword=parsed.get("productKeyword", ""),
             buyer_name=parsed.get("buyerName", ""),
@@ -588,13 +614,69 @@ def build_body_from_args(args: argparse.Namespace) -> dict[str, Any]:
             piece for piece in args.region_list.split(",") if piece.strip()
         )
     if not region_values:
-        region_values = list(DEFAULT_REGION_CODES)
-        logger.info(
-            "Chưa chọn --region, dùng mặc định %s. Hãy truyền --region để chọn nước.",
-            ",".join(DEFAULT_REGION_CODES),
+        # parse_args already rejects this for the CLI; keep the guard for
+        # programmatic callers instead of picking a country for them.
+        raise regions.RegionError(
+            "Chưa chọn quốc gia/vùng nào (--region/--region-list)."
         )
 
     return build_search_body(args.hs_code, region_values)
+
+
+def stale_data_error(query: str, state_query: str | None, pages: list[int]) -> str:
+    """Explain why an existing data/ folder cannot be reused for *query*.
+
+    Mirrors the web dashboard's ``_assert_dataset_matches_query``: a folder that
+    already holds pages from another query must never be silently reused, or the
+    crawl "finishes" in 0 seconds and the export contains the previous search's
+    rows. A folder without a recorded query is *unknown*, not a match.
+    """
+    shown = ", ".join(str(page) for page in pages[:5])
+    if len(pages) > 5:
+        shown += ", ..."
+    if state_query is None:
+        reason = (
+            "state.json không ghi lại điều kiện tìm kiếm (bản crawl cũ) nên "
+            "không thể biết dữ liệu thuộc truy vấn nào"
+        )
+    else:
+        reason = f"dữ liệu đang thuộc truy vấn khác ({state_query})"
+    return (
+        f"data/ đã có dữ liệu của truy vấn khác; dùng --force để crawl lại và ghi đè "
+        f"(hoặc trỏ DATA_DIR sang thư mục trống). Truy vấn hiện tại: {query}. "
+        f"Lý do: {reason}. Trang đã có: {shown}."
+    )
+
+
+def existing_page_numbers(data_dir: Optional[Path] = None) -> list[int]:
+    """Return the page numbers already stored in *data_dir*, ascending."""
+    target = data_dir if data_dir is not None else DATA_DIR
+    pages: list[int] = []
+    if not target.is_dir():
+        return pages
+    for path in target.glob("*.json"):
+        try:
+            pages.append(int(path.stem))
+        except ValueError:
+            continue
+    return sorted(pages)
+
+
+def recorded_query(state_path: Optional[Path] = None) -> Optional[str]:
+    """Return the query fingerprint stored in state.json, or None if unknown.
+
+    A missing file, an unreadable file or (importantly) a state saved by an older
+    build without a ``query`` key all return None, which callers must treat as
+    "unknown", never as "matches".
+    """
+    try:
+        state = load_state(state_path)
+    except Exception:  # noqa: BLE001 - a broken state must not crash the crawl
+        return None
+    if not state:
+        return None
+    value = state.get("query")
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -625,14 +707,62 @@ def main(argv: Optional[list[str]] = None) -> int:
     start_page = args.start_page
     query = query_fingerprint(body)
 
+    # Resume only from a state whose recorded query matches this run. A state
+    # without a "query" key is *unknown* (an older crawl), not a match: trusting
+    # it resumed mid-way into another query's pages and the crawl exited 0 having
+    # fetched nothing, so the export silently contained the previous search's
+    # rows. ``--force`` is the explicit opt-in to reuse/overwrite the folder.
     state = None if args.force else load_state()
+    state_query: Optional[str] = None
     if state is not None:
-        if state.get("query") and state["query"] != query:
-            logger.info(
-                "state.json thuộc truy vấn khác (%s), bỏ qua để không trộn dữ liệu.",
-                state["query"],
-            )
+        state_query = state.get("query")
+        if state_query != query:
+            if state_query is None:
+                logger.info(
+                    "state.json không ghi điều kiện tìm kiếm -> coi là dữ liệu cũ, "
+                    "không resume (truy vấn hiện tại: %s).",
+                    query,
+                )
+            else:
+                logger.info(
+                    "state.json thuộc truy vấn khác (%s), bỏ qua để không trộn dữ liệu.",
+                    state_query,
+                )
             state = None
+
+    # Refuse to crawl into a folder that already holds pages of another query.
+    # Without this the page-skip branch below treated *any* existing <page>.json
+    # as "already done", so a new query skipped every page and exited 0 with the
+    # old rows still on disk.
+    if not args.force:
+        existing = existing_page_numbers()
+        if existing:
+            # ``state_query`` is only set when a matching state was loaded; when
+            # it is None we must re-read the file to tell "no query recorded"
+            # apart from "no state at all". Either way an unknown query is not a
+            # match, so the folder is refused unless it belongs to this query.
+            recorded = state_query if state is not None else recorded_query()
+            if recorded != query:
+                message = stale_data_error(query, recorded, existing)
+                logger.error(message)
+                print(f"[ERROR] {message}", file=sys.stderr)
+                return 3
+    else:
+        # --force is the explicit opt-in to overwrite. Warn when the folder
+        # really does hold another query's pages, and name the ones this run
+        # will not touch: a --force run that stops early (e.g. --end-page) leaves
+        # those files behind, and merge_data would still merge them. Deleting
+        # them implicitly would be more destructive than the user asked for.
+        existing = existing_page_numbers()
+        if existing:
+            recorded = recorded_query()
+            if recorded != query:
+                logger.warning(
+                    "Đang ghi đè data/ đã có dữ liệu của truy vấn khác (%s). Những "
+                    "trang không được crawl lại trong phiên này vẫn còn trên đĩa và "
+                    "sẽ bị gộp khi export — dùng thư mục dữ liệu trống nếu muốn sạch.",
+                    recorded or "không rõ (bản crawl cũ)",
+                )
     if state is not None:
         resume_page = state["curPage"] + 1
         if resume_page > start_page:
@@ -668,13 +798,18 @@ def main(argv: Optional[list[str]] = None) -> int:
                 logger.info("Đã đạt --end-page=%s, dừng.", args.end_page)
                 break
 
+            # Only skip a page this run may legitimately resume over: the folder
+            # was already proven above (non-force path) to belong to this query.
+            # Under --force nothing is skipped, which is the documented way to
+            # overwrite a folder holding another query's pages.
             if not args.force and page_file_path(cur_page).exists():
                 skipped = count_records_in_file(cur_page)
                 records_crawled += skipped
                 logger.info(
-                    "Bỏ qua curPage=%s (data/%s.json đã tồn tại, %s records).",
+                    "Bỏ qua curPage=%s (data/%s.json đã tồn tại của cùng truy vấn %s, %s records).",
                     cur_page,
                     cur_page,
+                    query,
                     skipped,
                 )
                 if skipped < args.per_page:

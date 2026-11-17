@@ -1,0 +1,53 @@
+# Cấu hình Render cho TradeIT Crawler.
+#
+# LƯU Ý VỀ GÓI FREE: Render free KHÔNG hỗ trợ persistent disk (disk chỉ có ở gói
+# trả phí), nên file KHÔNG khai báo `disk:`. Filesystem của container bị xoá mỗi
+# lần redeploy và mỗi lần service ngủ đông. Vì vậy danh sách tài khoản được lưu ở
+# Supabase (xem mục "Lưu tài khoản bằng Supabase" trong README); các trang đã
+# crawl vẫn nằm trên filesystem tạm và sẽ mất — hãy tải về sau mỗi phiên.
+#
+# Nếu sau này nâng lên gói có disk, thêm vào service:
+#   disk:
+#     name: tradeit-data
+#     mountPath: /var/data
+#     sizeGB: 1
+# và đặt TRADEIT_DATA_DIR=/var/data.
+services:
+  - type: web
+    name: crawl-tradeit
+    # `runtime: python` dùng startCommand bên dưới (Procfile có cùng lệnh):
+    #   web: gunicorn --worker-class gthread --workers 1 --threads 8 ...
+    # Giữ 1 worker process: state của job nằm trong bộ nhớ tiến trình.
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    # One worker process + many threads, on purpose:
+    # - the crawl runs in a background thread and the whole job panel lives in
+    #   this process's memory (``job`` dict), so several *worker processes* would
+    #   each show their own state and the 2s /api/status poll would flip between
+    #   them (one says "running", the next says "idle");
+    # - with the default sync worker a single request at a time is served, so a
+    #   multi-second crawl page load would stall the dashboard;
+    # - gthread serves other requests while one is busy, which is what the 2s
+    #   polling and the "Đang crawl..." panel need.
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 1 --threads 8 --timeout 120 --graceful-timeout 30 web_app:app
+    healthCheckPath: /health
+    # TODO: xác nhận gói dịch vụ trong Render Dashboard. `free` là mặc định của
+    # project này; đổi thành `starter` trở lên nếu muốn dùng persistent disk.
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      # --- Supabase: nơi lưu danh sách tài khoản qua redeploy -----------------
+      # sync: false = giá trị đặt trong Render Dashboard, KHÔNG commit vào repo.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_TABLE
+        value: tradeit_accounts
+      # --- Đường dẫn file cục bộ (chỉ dùng khi KHÔNG cấu hình Supabase) --------
+      # Trên gói free đây là filesystem tạm: dữ liệu mất khi redeploy.
+      # - key: TRADEIT_DATA_DIR
+      #   value: /var/data
+      # - key: TRADEIT_ACCOUNTS_FILE
+      #   value: /var/data/accounts.json

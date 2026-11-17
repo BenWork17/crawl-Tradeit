@@ -147,10 +147,19 @@ sách dù không thuộc ISO-3166.
 Web sẽ crawl tuần tự từng account, tự bỏ qua trang đã có trong bộ dữ liệu đó và
 gộp kết quả cuối cùng thành một file Excel duy nhất.
 
-Ứng dụng chỉ chạy một job tại một thời điểm. Cookie không được ghi ra file;
-không nên bật debug hoặc chia sẻ URL dashboard công khai nếu chưa thêm lớp đăng nhập.
-Các file `data/`, `state.json` và file Excel trên hosting miễn phí có thể mất khi
-container khởi động lại; hãy dùng persistent disk hoặc tải file sau mỗi phiên.
+Ứng dụng chỉ chạy một job tại một thời điểm. Không nên bật debug hoặc chia sẻ URL
+dashboard công khai nếu chưa thêm lớp đăng nhập.
+
+Danh sách tài khoản (token / refresh_token) sau khi upload sẽ được **ghi nhớ** để
+lần crawl sau không phải upload lại — xem [Lưu tài khoản bằng Supabase](#lưu-tài-khoản-bằng-supabase)
+để biết cách làm cho nó sống sót qua mỗi lần deploy. Cookie **không** bao giờ được
+ghi ra `logs/` hay trả về qua API; chỉ có file lưu tài khoản (hoặc hàng Supabase)
+chứa token.
+
+Các file `data/`, `datasets/`, `state.json` và file Excel vẫn nằm trên filesystem
+của container. Trên hosting miễn phí (kể cả Render free) filesystem đó là **tạm
+thời**: mất khi redeploy và khi service ngủ đông. Hãy tải dữ liệu về sau mỗi phiên
+nếu chưa có nơi lưu bền vững.
 
 ### Tải, xem và xóa bộ dữ liệu
 
@@ -222,6 +231,134 @@ python tradeit_crawler.py --hs-code 090411 --region NL --region VN
 python tradeit_crawler.py --hs-code 090411 --region Asia
 ```
 
+## Lưu tài khoản bằng Supabase
+
+### Vì sao cần
+
+Render gói **free không có persistent disk** (disk chỉ có ở gói trả phí), và
+filesystem của container bị **xoá sạch mỗi lần redeploy**, đồng thời service free
+**ngủ đông sau một thời gian rảnh** rồi khởi động lại từ đầu. Nếu chỉ lưu bằng file,
+mỗi lần deploy bạn lại phải upload lại Excel tài khoản.
+
+Vì vậy danh sách tài khoản có thể được lưu ở **Supabase** (Postgres + REST API).
+Khi bật, tài khoản nằm ngoài container nên **redeploy không làm mất**; dashboard vẫn
+hiện đúng số tài khoản đã lưu.
+
+> **Lưu ý:** Supabase chỉ giải quyết phần **tài khoản**. Các trang đã crawl
+> (`datasets/`, `data/`, `state.json`) vẫn ghi lên filesystem tạm của container và
+> **sẽ mất khi redeploy/ngủ đông** — hãy tải ZIP/Excel về sau mỗi phiên. Việc đưa
+> datasets lên Supabase là thay đổi riêng, chưa làm ở đây.
+
+Không cấu hình Supabase thì module dùng file JSON cục bộ như trước — chạy local
+không đổi gì và **không phát sinh request mạng nào**.
+
+### 1. Tạo project Supabase
+
+1. Vào <https://supabase.com>, tạo project mới (gói free là đủ).
+2. Vào **Project Settings → API**, lấy:
+   - **Project URL** — dạng `https://<project-ref>.supabase.co`
+   - **service_role key** (mục *Project API keys*). Dùng `service_role` vì bảng
+     không bật RLS; khoá này bỏ qua RLS và chỉ được dùng ở server, **không** đưa
+     vào trình duyệt.
+
+### 2. Tạo bảng
+
+Mở **SQL Editor** và chạy đúng đoạn SQL này (một dòng duy nhất giữ cả danh sách
+tài khoản trong một cột `jsonb`):
+
+```sql
+create table if not exists public.tradeit_accounts (
+    id         text primary key,
+    accounts   jsonb       not null,
+    updated_at timestamptz not null default now()
+);
+
+-- Bảng chỉ được truy cập bằng service_role key từ server.
+-- Bật RLS và không tạo policy: khoá anon/public không đọc được gì.
+alter table public.tradeit_accounts enable row level security;
+```
+
+Toàn bộ danh sách nằm ở hàng `id = 'default'`, cột `accounts` có dạng:
+
+```json
+{"version": 1, "updated_at": "…", "count": 2,
+ "accounts": [{"token": "…", "refresh_token": "…"}]}
+```
+
+### 3. Biến môi trường trên Render
+
+**Render Dashboard → service → Environment → Add Environment Variable:**
+
+| Biến | Bắt buộc | Ý nghĩa |
+|------|----------|---------|
+| `SUPABASE_URL` | có | Project URL, ví dụ `https://abcdefgh.supabase.co` |
+| `SUPABASE_KEY` | có | `service_role` key |
+| `SUPABASE_TABLE` | không | Tên bảng, mặc định `tradeit_accounts` |
+
+Chỉ cần đặt **cả** `SUPABASE_URL` và `SUPABASE_KEY` là backend Supabase tự bật.
+Đặt một trong hai thì vẫn dùng file cục bộ.
+
+> **Không bao giờ commit key** vào repo. `requirements.txt`, README và code chỉ
+> đọc từ biến môi trường; key không được ghi ra log, không nằm trong
+> `/api/accounts`, và không xuất hiện trong thông báo lỗi. Nếu key lộ, hãy
+> **rotate** ngay trong Supabase.
+
+### 4. Các biến môi trường khác (tuỳ chọn)
+
+Thứ tự chọn nơi lưu của backend file (dùng khi **không** cấu hình Supabase, hoặc
+khi truyền `path=`):
+
+1. tham số `path=` (đường dẫn file, hoặc thư mục chứa `accounts.json`);
+2. `TRADEIT_ACCOUNTS_FILE` — đường dẫn **file** đầy đủ;
+3. `TRADEIT_DATA_DIR` + `/accounts.json` — **thư mục** chứa file;
+4. mặc định `<project>/datasets/accounts.json` (đã nằm trong `.gitignore`).
+
+`TRADEIT_DATA_DIR` và `TRADEIT_ACCOUNTS_FILE` chỉ có ý nghĩa với backend file. Trên
+Render free chúng trỏ vào filesystem tạm nên **không** giúp dữ liệu sống sót qua
+redeploy — đó là lý do dùng Supabase ở trên.
+
+#### Quyền truy cập file tài khoản trên Windows (hạn chế đã biết)
+
+Trên Linux/macOS, `accounts_store` đặt file tài khoản ở chế độ `0600` (chỉ chủ sở
+hữu đọc được). Trên **Windows** điều này **không** được áp đặt: `os.chmod` ở đó chỉ
+bật/tắt thuộc tính read-only, không diễn đạt được ACL, nên file **thừa hưởng quyền
+của thư mục chứa nó** — người dùng khác trên cùng máy (hoặc ai đọc được roaming
+profile) có thể mở được file. Đây là hạn chế đã biết, chấp nhận, và được ghi log
+một lần khi lưu file.
+
+Cách giảm thiểu, theo thứ tự ưu tiên:
+
+1. Dùng **Supabase** trên Windows — không có file credential cục bộ nào cả;
+2. Đặt `TRADEIT_ACCOUNTS_FILE` vào thư mục **riêng của bạn** (ví dụ
+   `C:\Users\<tên-bạn>\...`) và **không** đặt trong thư mục `shared`/roaming;
+3. Trên máy nhiều người dùng, giới hạn quyền bằng DACL tường minh:
+   `icacls accounts.json /inheritance:r /grant:r "%USERNAME%:F"`.
+
+File này luôn nằm trong `.gitignore` ở mọi vị trí mặc định, nên không thể bị commit.
+
+### 5. Kiểm chứng đã hoạt động
+
+1. Mở dashboard, upload Excel tài khoản như bình thường. Sau khi upload, khối tài
+   khoản hiển thị **"Đã lưu N tài khoản"** kèm thời điểm cập nhật.
+2. Kiểm tra trực tiếp Supabase: **Table Editor → `tradeit_accounts`** phải có đúng
+   một hàng `id = default`. (Hoặc `GET /api/accounts` — chỉ trả về số lượng và
+   trạng thái, không trả token.)
+3. **Redeploy** service trên Render (Manual Deploy → Deploy latest commit), hoặc để
+   service ngủ đông rồi truy cập lại.
+4. Tải lại dashboard: khối tài khoản vẫn phải hiện **đúng số tài khoản đã lưu** và
+   form crawl **không** đòi upload lại Excel. Đó là bằng chứng tài khoản đã nằm
+   ngoài container.
+
+Nếu vẫn thấy "Chưa có danh sách tài khoản nào được lưu", xem log Render: một dòng
+cảnh báo `Supabase không dùng được (…)` cho biết lý do (sai key, thiếu bảng, mạng)
+và app đã tạm quay về file cục bộ trong 60 giây trước khi thử lại.
+
+`accounts_store.summary()` trả trường `backend` (`file`, `supabase` hoặc
+`file-fallback`) để biết backend nào đang thực sự phục vụ. Endpoint `/api/accounts`
+cũng trả `backend` (kèm `fallback_reason` khi đang ở `file-fallback`), **không**
+trả đường dẫn file. Nhờ vậy dashboard hiện được nhãn "Lưu trữ: Supabase" /
+"Lưu trữ: file tạm" và cảnh báo mất dữ liệu khi phải fallback về file tạm.
+
 ## Cấu trúc output
 
 ```
@@ -278,6 +415,16 @@ Tool nhớ tiến độ theo **2 lớp**:
   (không ghi lại, không tốn credit). Gặp file có số records `< perPage` → coi là trang cuối và dừng.
 
 `--force` bỏ qua cả state lẫn file đã có, crawl lại từ `--start-page`.
+
+> **Cảnh báo `--force` một phần khoảng trang:** `--force` chỉ ghi đè những trang
+> nó thực sự crawl. Nếu `data/` còn trang của **điều kiện tìm kiếm khác** nằm
+> ngoài khoảng `--start-page..--end-page`, các trang đó vẫn ở lại và sẽ bị gộp
+> vào file export. CLI có in `[WARNING]` nêu rõ điều kiện cũ và các trang đó,
+> nhưng không tự xoá dữ liệu của bạn. Muốn sạch hoàn toàn: xoá `data/` +
+> `state.json` trước khi chạy.
+>
+> Ngoài `--force`, CLI **từ chối** (exit 3) khi thấy `data/` hoặc `state.json`
+> thuộc điều kiện tìm kiếm khác, thay vì lặng lẽ bỏ qua trang và báo "xong".
 
 ## Xử lý lỗi
 

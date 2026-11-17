@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import traceback
@@ -18,21 +19,65 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file,
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
+import accounts_store
 import merge_data
 import regions
 import tradeit_crawler as crawler
 
 
 app = Flask(__name__)
-job_lock = threading.Lock()
+# Reentrant on purpose: several helpers read or update ``job`` while holding
+# this lock, and a caller that already holds it must not deadlock the request.
+# The rule is still "hold it briefly, never around rendering or I/O", but making
+# the lock reentrant means a future nested call degrades in cost, not in a hang.
+job_lock = threading.RLock()
+# Held for the whole "claim the crawl slot" sequence in /api/jobs, which the
+# short-lived job_lock cannot cover (the check and the status assignment are
+# separated by Excel parsing and dataset setup). Non-blocking: a second
+# simultaneous submit gets the 409 page immediately instead of queueing.
+start_lock = threading.Lock()
 # Every stored path is anchored to this file's directory. Using bare relative
 # paths broke `send_file`, which resolves against the Flask root while
 # `Path.open` resolves against the process CWD (so exports 500'd whenever the
 # app was started from another working directory).
 BASE_DIR = Path(__file__).resolve().parent
-LEGACY_DATA_DIR = BASE_DIR / "data"
-LEGACY_STATE_FILE = BASE_DIR / "state.json"
-DATASETS_ROOT = BASE_DIR / "datasets"
+
+# ``TRADEIT_DATA_DIR`` is shared with accounts_store (which uses it for
+# accounts.json), so one mount point can hold both the account list and the
+# crawl output. They occupy different paths under it, so the two never collide.
+DATA_DIR_ENV = "TRADEIT_DATA_DIR"
+
+
+def _resolve_data_root() -> Path:
+    """Where crawl output lives: ``TRADEIT_DATA_DIR`` if set, else the project.
+
+    Render (and any container host) wipes the container filesystem on every
+    redeploy and, on free instances, every time the service spins down. Crawled
+    pages, per-dataset ``state.json`` and the .xlsx export are written to
+    ``DATA_ROOT``, so pointing ``TRADEIT_DATA_DIR`` at a persistent disk mount
+    (e.g. ``/var/data``) is what keeps them alive. Unset -- the local default --
+    resolves to the project directory, so behaviour is byte-for-byte unchanged.
+
+    A relative value is anchored at the project root rather than the process
+    CWD, for the same reason as ``BASE_DIR`` above.
+    """
+    raw = os.environ.get(DATA_DIR_ENV, "").strip()
+    if not raw:
+        return BASE_DIR
+    root = Path(raw).expanduser()
+    if not root.is_absolute():
+        root = BASE_DIR / root
+    return root
+
+
+# ``TRADEIT_DATA_DIR`` is shared with accounts_store (which uses it for
+# accounts.json), so one mount point can hold both the account list and the
+# crawl output. They occupy different paths under it, so the two never collide.
+DATA_DIR_ENV = "TRADEIT_DATA_DIR"
+DATA_ROOT = _resolve_data_root()
+LEGACY_DATA_DIR = DATA_ROOT / "data"
+LEGACY_STATE_FILE = DATA_ROOT / "state.json"
+DATASETS_ROOT = DATA_ROOT / "datasets"
 LEGACY_DATASET_NAME = "legacy"
 ACTIVE_THEME_KEY = "tradeit-theme"
 job: dict[str, Any] = {
@@ -48,6 +93,17 @@ job: dict[str, Any] = {
     "dataset_name": LEGACY_DATASET_NAME,
     "query_label": "",
     "started_at": None,
+    # Credit-exhaustion counters. Secret-free by construction: they are counts
+    # and positions only (never a token), taken from accounts_store.CreditTracker
+    # so /api/status can tell the UI "2/3 accounts out of credit" without
+    # exposing a single credential.
+    "credit_total": 0,
+    "credit_exhausted": 0,
+    "credit_label": "",
+    "credit_status": accounts_store.EXHAUSTION_UNKNOWN,
+    "credit_message": "",
+    # Where this run's accounts came from: "upload", "stored", or "" (no run).
+    "accounts_source": "",
 }
 stop_event = threading.Event()
 ALLOWED_ACCOUNT_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
@@ -154,7 +210,7 @@ def _clean_name(name: str) -> str:
 
 def _dataset_dir(name: str) -> Path:
     if name == LEGACY_DATASET_NAME:
-        return BASE_DIR
+        return DATA_ROOT
     return DATASETS_ROOT / _clean_name(name)
 
 
@@ -172,7 +228,7 @@ def _dataset_state_file(name: str) -> Path:
 
 def _dataset_csv_file(name: str) -> Path:
     if name == LEGACY_DATASET_NAME:
-        return BASE_DIR / "data.csv"
+        return DATA_ROOT / "data.csv"
     return _dataset_dir(name) / "data.csv"
 
 
@@ -586,6 +642,281 @@ def _parse_accounts_excel(upload: Any) -> list[dict[str, str]]:
     return accounts
 
 
+def _client_prefers_json() -> bool:
+    """True only when the caller explicitly negotiated a JSON response.
+
+    A browser submitting the crawl form advertises ``text/html`` first (with
+    ``*/*;q=0.8`` as a fallback), so it always gets the dashboard back. API
+    clients that ask for ``Accept: application/json`` keep the JSON error body.
+    """
+    accept = request.accept_mimetypes
+    if accept["application/json"] <= 0:
+        return False
+    return accept.best == "application/json"
+
+
+def _form_snapshot(form: Any) -> dict[str, Any]:
+    """Copy the submitted crawl form so an error page keeps the user's input.
+
+    Values are plain strings (plus the repeated ``region_codes`` list) so the
+    template can echo them back without a second request. Nothing is filled in
+    here: an empty field stays empty, because guessing a country or an HS code
+    is exactly the bug this guards against.
+    """
+
+    def _text(name: str) -> str:
+        return str(form.get(name, "") or "").strip()
+
+    return {
+        "hs_code": _text("hs_code"),
+        "region_codes": [
+            str(value).strip()
+            for value in form.getlist("region_codes")
+            if str(value).strip()
+        ],
+        "region_text": _text("region_text"),
+        "importer": _text("importer"),
+        "dataset_name": _text("dataset_name"),
+        "dataset_explicit": _text("dataset_explicit"),
+        "start_page": _text("start_page"),
+        "end_page": _text("end_page"),
+        "per_page": _text("per_page"),
+        "delay": _text("delay"),
+        "force": form.get("force") == "on",
+    }
+
+
+def _submitted_query_label(
+    form_values: dict[str, Any], body: dict[str, Any] | None = None
+) -> str:
+    """Describe the query the user just submitted (never a defaulted one)."""
+    if body is not None:
+        return crawler.describe_body(body)
+
+    raw_hs = str(form_values.get("hs_code") or "").strip() or "(chưa nhập)"
+    raw_regions = list(form_values.get("region_codes") or [])
+    for key in ("region_text", "importer"):
+        value = str(form_values.get(key) or "").strip()
+        if value:
+            raw_regions.append(value)
+
+    codes: list[str] = []
+    for value in raw_regions:
+        for piece in str(value).replace(";", ",").split(","):
+            code = regions.normalize_country_code(piece)
+            if code is not None and code not in codes:
+                codes.append(code)
+    if not codes:
+        return f"HS {raw_hs} · chưa chọn quốc gia/vùng"
+    # Same ordering as the request body so the label matches what was sent.
+    ordered = [code for code in regions.all_country_codes() if code in codes]
+    ordered += [code for code in codes if code not in ordered]
+    labels = ", ".join(regions.country_label(code) for code in ordered)
+    return f"HS {raw_hs} · {len(ordered)} nước nhập: {labels}"
+
+
+def _render_dashboard_error(
+    message: str,
+    *,
+    form_values: dict[str, Any] | None = None,
+    status_code: int = 400,
+    body: dict[str, Any] | None = None,
+    dataset_name: str | None = None,
+    mark_error: bool = True,
+):
+    """Re-render the dashboard for a rejected ``POST /api/jobs``.
+
+    The crawl form is a normal browser navigation, so answering with raw JSON
+    replaced the whole dashboard with ``{"error": ...}`` and read as "the crawl
+    returned no result". The page is rendered again instead, carrying a visible
+    error message and the values the user had just submitted so they can retry
+    without retyping. JSON is only produced when the caller asked for it.
+
+    ``mark_error`` also records the failure as the job's current state, so the
+    dashboard's 2-second ``/api/status`` poll cannot blank the message a moment
+    after it appeared. It is skipped when a crawl is actually in flight, because
+    that job's status belongs to the running worker.
+    """
+    if _client_prefers_json():
+        return jsonify({"error": message}), status_code
+
+    query_label = None
+    if form_values is not None:
+        query_label = _submitted_query_label(form_values, body)
+
+    with job_lock:
+        persist = mark_error and job.get("status") not in {"running", "stopped"}
+        if persist:
+            job["status"] = "error"
+            job["message"] = message
+            if query_label is not None:
+                job["query_label"] = query_label
+            if dataset_name:
+                job["dataset_name"] = dataset_name
+        current = {key: value for key, value in job.items() if key != "stop_token"}
+        current = dict(current)
+    if not persist:
+        # The rendered page still explains this attempt, it just does not
+        # rewrite the state of a crawl that is running (or was stopped).
+        current["message"] = message
+        if query_label is not None:
+            current["query_label"] = query_label
+        if dataset_name:
+            current["dataset_name"] = dataset_name
+    return (
+        render_template(
+            "index.html",
+            job=current,
+            error=message,
+            form_values=form_values or {},
+        ),
+        status_code,
+    )
+
+
+def _accounts_public_summary() -> dict[str, Any]:
+    """Secret-free description of the stored account list.
+
+    Built from ``accounts_store.summary()``, which reports count/timestamp/state
+    and never a token, so this is safe to hand to the dashboard and to
+    ``/api/status``. The on-disk ``path`` is deliberately dropped: the UI only
+    needs to know *whether* accounts are stored, and a filesystem path is noise
+    (it would also leak the deploy layout into a browser response).
+
+    ``backend`` (``file`` / ``supabase`` / ``file-fallback``) is included because
+    the dashboard shows where the accounts are kept and warns when a Supabase
+    failure means the local file is only a temporary cache. ``fallback_reason``
+    is included only when present; it is a fixed phrase or an HTTP status word
+    from accounts_store, never a URL or key.
+    """
+    info = accounts_store.summary()
+    summary: dict[str, Any] = {
+        "count": int(info.get("count") or 0),
+        "updated_at": info.get("updated_at"),
+        "state": info.get("state"),
+        "message": info.get("message"),
+        "has_accounts": bool(info.get("has_accounts")),
+        "needs_upload": bool(info.get("needs_upload")),
+        "backend": info.get("backend"),
+    }
+    if info.get("fallback_reason"):
+        summary["fallback_reason"] = info.get("fallback_reason")
+    return summary
+
+
+def _accounts_from_upload(upload: Any) -> list[dict[str, str]]:
+    """Parse the uploaded Excel and remember it, replacing the stored set.
+
+    Returns the accounts so the caller can start the run immediately. The
+    stored copy is what makes the next crawl work without re-uploading, so the
+    save happens here rather than only on a successful crawl.
+
+    Raises:
+        ValueError: The upload is missing/empty/unreadable. The message is safe
+            to show in the dashboard (no token, no path, no traceback), so every
+            rejection takes the normal 400 + re-render path instead of a 500.
+    """
+    try:
+        accounts = _parse_accounts_excel(upload)
+    except ValueError:
+        raise
+    except zipfile.BadZipFile as exc:
+        # A renamed .txt/.csv, a truncated download or an .xls (old binary
+        # format) all surface as this from openpyxl's zip layer.
+        raise ValueError(
+            "File tải lên không phải file Excel .xlsx hợp lệ "
+            "(không đọc được cấu trúc zip). Hãy xuất lại file từ Excel."
+        ) from exc
+    except KeyError as exc:
+        # openpyxl raises KeyError for a zip that lacks the expected xlsx parts.
+        raise ValueError(
+            "File Excel bị thiếu thành phần bên trong (có thể đã hỏng). "
+            "Hãy xuất lại file và thử lại."
+        ) from exc
+    except (OSError, EOFError) as exc:
+        raise ValueError(
+            f"Không đọc được file Excel đã tải lên: {type(exc).__name__}"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - openpyxl raises many shapes
+        # Defence in depth: an unreadable upload must never become a 500 page.
+        raise ValueError(
+            f"Không đọc được file Excel đã tải lên ({type(exc).__name__}). "
+            "Hãy kiểm tra lại file và thử lại."
+        ) from exc
+    if not accounts:
+        raise ValueError("Không đọc được tài khoản nào từ file Excel")
+    try:
+        accounts_store.save(accounts)
+    except (OSError, ValueError) as exc:
+        # The crawl itself can still run with the in-memory accounts; only the
+        # "remember this for next time" part failed. Say so without pretending
+        # the run failed (and without echoing any token).
+        print(f"[WARN] Không lưu được danh sách tài khoản: {exc}")
+    return accounts
+
+
+def _accounts_from_store() -> list[dict[str, str]]:
+    """Load the accounts saved by an earlier run ([] when none usable)."""
+    return accounts_store.load()
+
+
+def _resolve_accounts(
+    upload: Any,
+) -> tuple[list[dict[str, str]] | None, str, str | None]:
+    """Pick the account list for this run: a fresh upload wins over the store.
+
+    Returns ``(accounts, source, error)``:
+    - ``accounts`` is None only when nothing usable is available, and then
+      ``error`` explains what to do next.
+    - ``source`` is ``"upload"``, ``"stored"`` or ``""``.
+    """
+    has_upload = upload is not None and bool(getattr(upload, "filename", ""))
+    if has_upload:
+        try:
+            return _accounts_from_upload(upload), "upload", None
+        except ValueError as exc:
+            return None, "", str(exc)
+
+    stored = _accounts_from_store()
+    if stored:
+        return stored, "stored", None
+
+    info = accounts_store.summary()
+    state = str(info.get("state") or "")
+    if state == accounts_store.STATE_CORRUPT:
+        message = (
+            "Danh sách tài khoản đã lưu bị lỗi định dạng. "
+            "Hãy upload lại file Excel tài khoản."
+        )
+    elif state == accounts_store.STATE_UNREADABLE:
+        message = (
+            "Không đọc được danh sách tài khoản đã lưu. "
+            "Hãy upload lại file Excel tài khoản."
+        )
+    else:
+        message = (
+            "Chưa có danh sách tài khoản nào được lưu. "
+            "Hãy upload file Excel tài khoản (cột token / refresh_token) để bắt đầu."
+        )
+    return None, "", message
+
+
+def _credit_update(
+    run_id: int, tracker: "accounts_store.CreditTracker", **extra: Any
+) -> None:
+    """Publish the tracker's secret-free summary into ``job`` for the UI."""
+    info = tracker.summary()
+    _update(
+        run_id,
+        credit_total=int(info.get("total") or 0),
+        credit_exhausted=int(info.get("exhausted") or 0),
+        credit_label=str(info.get("label") or ""),
+        credit_status=str(info.get("status") or ""),
+        credit_message=str(info.get("message") or ""),
+        **extra,
+    )
+
+
 def _update(run_id: int | None = None, **values: Any) -> None:
     with job_lock:
         if run_id is not None and job.get("run_id") != run_id:
@@ -602,6 +933,7 @@ def _run(options: dict[str, Any]) -> None:
     seen: set[str] = options["seen"]
     accounts: list[dict[str, str]] = options["accounts"]
     dataset_name: str = options["dataset_name"]
+    accounts_source: str = options.get("accounts_source", "")
     # Resolve this run's paths once. The crawler's module globals are shared by
     # every thread, so a stopped run that wakes up late could otherwise write
     # its pages into whatever dataset the *next* job selected.
@@ -611,13 +943,22 @@ def _run(options: dict[str, Any]) -> None:
     body = options["body"]
     query = crawler.query_fingerprint(body)
     query_label = crawler.describe_body(body)
+    # Accounts are tracked by 0-based position, never by token, so every
+    # exhaustion figure published below is safe to show in the UI.
+    tracker = accounts_store.CreditTracker(accounts)
 
     def cancelled() -> bool:
         return stop_token.is_set() or stop_event.is_set()
 
     if not options["force"]:
+        # Only trust the saved total when the state belongs to *this* query. A
+        # state from another query (or an old one with no recorded query) is
+        # unknown, so its total must not be shown or used: it would display a
+        # count from a different search. The API's own data.total replaces it as
+        # soon as the first page arrives, so this is about not reporting a
+        # foreign number and not trusting a foreign resume point.
         saved_state = crawler.load_state(state_file)
-        if saved_state:
+        if saved_state and saved_state.get("query") == query:
             total = saved_state.get("total")
 
     _update(
@@ -632,7 +973,9 @@ def _run(options: dict[str, Any]) -> None:
         account_label="",
         dataset_name=dataset_name,
         query_label=query_label,
+        accounts_source=accounts_source,
     )
+    _credit_update(run_id, tracker)
 
     try:
         if not accounts:
@@ -725,10 +1068,16 @@ def _run(options: dict[str, Any]) -> None:
                     page += 1
                     options["stop_token"].wait(options["delay"])
             except (crawler.AuthError, crawler.CreditError) as exc:
+                # Record which account failed *and why*, by position only. The
+                # loop falls through to the next account; if there is none, the
+                # final handler below turns this into the no-credit state.
+                position = account_index - 1
+                tracker.mark_exhausted(position)
                 if account_index >= len(accounts):
                     raise
-                _update(
+                _credit_update(
                     run_id,
+                    tracker,
                     message=(
                         f"Tài khoản {account_index}/{len(accounts)} dừng ở trang {page}: "
                         f"{exc}. Chuyển sang tài khoản kế tiếp."
@@ -739,18 +1088,78 @@ def _run(options: dict[str, Any]) -> None:
             finally:
                 session.close()
 
+        credit = tracker.summary()
         if cancelled():
-            _update(run_id, status="stopped", message="Đã dừng theo yêu cầu", records=len(seen))
+            _credit_update(
+                run_id, tracker, status="stopped", message="Đã dừng theo yêu cầu", records=len(seen)
+            )
+        elif credit["all_exhausted"]:
+            # Every account ran out of credit (or its token was rejected), so the
+            # crawl stops with a status the UI can branch on -- never a plain
+            # "completed" that reads like success.
+            _credit_update(
+                run_id,
+                tracker,
+                status="no_credit",
+                message=(
+                    f"Tất cả {credit['total']} tài khoản đã hết credit hoặc token hết hạn "
+                    f"({credit['exhausted']}/{credit['total']}). "
+                    "Hãy upload file Excel tài khoản mới để tiếp tục crawl."
+                ),
+                records=len(seen),
+                total=total,
+            )
+        elif credit["any_exhausted"]:
+            # Some accounts died but others carried on: report the count so the
+            # user knows to replace them before the next run.
+            _credit_update(
+                run_id,
+                tracker,
+                status="completed",
+                message=(
+                    f"Hoàn tất: {len(seen)} bản ghi. "
+                    f"{credit['message']}."
+                ),
+                records=len(seen),
+                total=total,
+            )
         else:
-            _update(run_id, status="completed", message=f"Hoàn tất: {len(seen)} bản ghi", records=len(seen))
+            _credit_update(
+                run_id,
+                tracker,
+                status="completed",
+                message=f"Hoàn tất: {len(seen)} bản ghi",
+                records=len(seen),
+            )
     except (crawler.AuthError, crawler.CreditError) as exc:
-        _update(
-            run_id,
-            status="error",
-            message=f"Không crawl được tài khoản cuối ở trang {page}: {exc}.",
-            records=len(seen),
-            total=total,
-        )
+        # The last account failed. With >= 1 account that always means every
+        # account is out of credit, so end in the distinguishable no_credit
+        # state and tell the user what to do rather than reporting a generic
+        # error that looks like a network problem. The counters must be
+        # published here too: the loop's own last update happened *before* this
+        # account was marked, so without this the UI would show a stale count.
+        credit = tracker.summary()
+        if credit["all_exhausted"]:
+            _credit_update(
+                run_id,
+                tracker,
+                status="no_credit",
+                message=(
+                    f"Tất cả {credit['total']} tài khoản đã hết credit hoặc token hết hạn "
+                    f"({credit['exhausted']}/{credit['total']}). "
+                    "Hãy upload file Excel tài khoản mới để tiếp tục crawl."
+                ),
+                records=len(seen),
+                total=total,
+            )
+        else:
+            _update(
+                run_id,
+                status="error",
+                message=f"Không crawl được tài khoản cuối ở trang {page}: {exc}.",
+                records=len(seen),
+                total=total,
+            )
     except (requests.RequestException, RuntimeError, OSError, ValueError) as exc:
         _update(run_id, status="error", message=str(exc))
     except Exception as exc:
@@ -766,22 +1175,61 @@ def _run(options: dict[str, Any]) -> None:
 def index():
     with job_lock:
         current = {key: value for key, value in job.items() if key != "stop_token"}
-    return render_template("index.html", job=current)
+    # ``error`` and ``form_values`` are always present so the template can rely
+    # on them: a normal page load has no error and no submitted values, and the
+    # error path (_render_dashboard_error) fills both in.
+    return render_template("index.html", job=current, error=None, form_values={})
 
 
 @app.post("/api/jobs")
 def start_job():
+    """Claim the single crawl slot, then start it.
+
+    ``job_lock`` alone cannot make this atomic: the "is a job running?" check and
+    the ``status="running"`` assignment are separated by the Excel parse and the
+    dataset setup, both of which do I/O. With one sync worker that gap was
+    unreachable, but the gthread worker runs requests concurrently, so two
+    near-simultaneous submits could both pass the check and start two crawls
+    writing into the same folder. This non-blocking lock serialises the whole
+    claim sequence without touching the short-lived ``job_lock`` used by
+    ``/api/status``.
+    """
+    if not start_lock.acquire(blocking=False):
+        return _render_dashboard_error(
+            "Đang có một job chạy. Hãy dừng job hiện tại trước khi bắt đầu job mới.",
+            form_values=_form_snapshot(request.form),
+            status_code=409,
+        )
+    try:
+        return _start_job()
+    finally:
+        start_lock.release()
+
+
+def _start_job():
+    # Snapshot before any validation: every rejection below re-renders the
+    # dashboard with exactly what the user typed, never a defaulted value.
+    form_values = _form_snapshot(request.form)
+
     with job_lock:
-        if job["status"] == "running":
-            return jsonify({"error": "Đang có một job chạy"}), 409
+        already_running = job["status"] == "running"
+    if already_running:
+        # The renderer reads/updates ``job`` under the same lock, so it must be
+        # called OUTSIDE this block: acquiring job_lock twice on one thread
+        # deadlocked the request (and, for a dead client, pinned a worker).
+        return _render_dashboard_error(
+            "Đang có một job chạy. Hãy dừng job hiện tại trước khi bắt đầu job mới.",
+            form_values=form_values,
+            status_code=409,
+        )
 
     accounts_file = request.files.get("accounts_file")
-    try:
-        accounts = _parse_accounts_excel(accounts_file)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    accounts, accounts_source, accounts_error = _resolve_accounts(accounts_file)
     if not accounts:
-        return jsonify({"error": "Không đọc được tài khoản nào từ file Excel"}), 400
+        return _render_dashboard_error(
+            accounts_error or "Chưa có danh sách tài khoản nào được lưu.",
+            form_values=form_values,
+        )
 
     try:
         start_page = max(1, int(request.form.get("start_page", "1")))
@@ -790,10 +1238,16 @@ def start_job():
         per_page = min(50, max(1, int(request.form.get("per_page", "50"))))
         delay = max(0.0, float(request.form.get("delay", "1.5")))
     except ValueError:
-        return jsonify({"error": "Thông số trang, số bản ghi hoặc delay không hợp lệ"}), 400
+        return _render_dashboard_error(
+            "Thông số trang, số bản ghi hoặc delay không hợp lệ",
+            form_values=form_values,
+        )
 
     if end_page is not None and end_page < start_page:
-        return jsonify({"error": "Trang kết thúc phải lớn hơn hoặc bằng trang bắt đầu"}), 400
+        return _render_dashboard_error(
+            "Trang kết thúc phải lớn hơn hoặc bằng trang bắt đầu",
+            form_values=form_values,
+        )
 
     try:
         region_codes = _parse_region_selection(request.form)
@@ -802,7 +1256,7 @@ def start_job():
             region_codes,
         )
     except regions.RegionError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return _render_dashboard_error(str(exc), form_values=form_values)
 
     dataset_raw = _resolve_dataset_from_request(request.form, body)
     force = request.form.get("force") == "on"
@@ -812,7 +1266,33 @@ def start_job():
             dataset_name, crawler.query_fingerprint(body), force
         )
     except (ValueError, regions.RegionError) as exc:
-        return jsonify({"error": str(exc)}), 400
+        # The per-dataset query fingerprint guard rejects a folder that already
+        # holds pages from a different query. The reason must be readable on the
+        # dashboard, so render it there instead of handing back a JSON blob.
+        # ``_clean_dataset_name`` can itself raise for an unusable name (that is
+        # one of the failures caught here), so it must not break the render.
+        try:
+            shown_dataset = _clean_dataset_name(dataset_raw)
+        except ValueError:
+            shown_dataset = None
+        # ``_set_crawler_paths`` already pointed the crawler's module globals at
+        # the rejected folder. Nothing started, so put them back on the dataset
+        # the dashboard is actually showing. Resolved without ``_ensure_dataset``
+        # so a rejection never creates a folder as a side effect.
+        with job_lock:
+            active_dataset = str(job.get("dataset_name", LEGACY_DATASET_NAME))
+        try:
+            active_dataset = _clean_dataset_name(active_dataset)
+        except ValueError:
+            active_dataset = LEGACY_DATASET_NAME
+        crawler.DATA_DIR = _dataset_data_dir(active_dataset)
+        crawler.STATE_FILE = _dataset_state_file(active_dataset)
+        return _render_dashboard_error(
+            str(exc),
+            form_values=form_values,
+            body=body,
+            dataset_name=shown_dataset,
+        )
     seen = _load_seen_fingerprints()
     run_stop = threading.Event()
     options = {
@@ -823,6 +1303,7 @@ def start_job():
         "force": force,
         "body": body,
         "accounts": accounts,
+        "accounts_source": accounts_source,
         "seen": seen,
         "dataset_name": dataset_name,
         "stop_token": run_stop,
@@ -844,6 +1325,12 @@ def start_job():
             dataset_name=dataset_name,
             query_label=crawler.describe_body(body),
             started_at=time.time(),
+            accounts_source=accounts_source,
+            credit_total=len(accounts),
+            credit_exhausted=0,
+            credit_label=f"0/{len(accounts)}",
+            credit_status=accounts_store.classify_exhaustion(len(accounts), 0),
+            credit_message="",
         )
         # Remembered so /api/jobs/stop can signal exactly this run.
         job["stop_token"] = run_stop
@@ -871,12 +1358,60 @@ def status():
         return jsonify({key: value for key, value in job.items() if key != "stop_token"})
 
 
+@app.get("/api/accounts")
+def accounts_status():
+    """Report the remembered account list without revealing any credential.
+
+    The dashboard uses this to show "3 tài khoản, cập nhật lúc ..." and to decide
+    whether the file input is still mandatory. Only the count, timestamp, state
+    and safe message are returned -- never a token, and not the filesystem path.
+    """
+    return jsonify(_accounts_public_summary())
+
+
+@app.post("/api/accounts/clear")
+def accounts_clear():
+    """Forget the stored account list (the user must upload a new one)."""
+    with job_lock:
+        running = job.get("status") == "running"
+    if running:
+        # Deleting the credentials out from under a live crawl would make the
+        # in-flight account impossible to replace, so refuse instead.
+        return (
+            jsonify(
+                {
+                    "error": "Đang có job chạy. Hãy dừng job rồi mới xóa danh sách tài khoản."
+                }
+            ),
+            409,
+        )
+    try:
+        removed = accounts_store.clear()
+    except OSError as exc:
+        return jsonify({"error": f"Không xóa được danh sách tài khoản: {exc}"}), 500
+    return jsonify(
+        {
+            **_accounts_public_summary(),
+            "removed": bool(removed),
+            "message": (
+                "Đã xóa danh sách tài khoản đã lưu."
+                if removed
+                else "Không có danh sách tài khoản nào để xóa."
+            ),
+        }
+    )
+
+
 @app.get("/api/regions")
 def list_regions():
     """Country catalog for the region picker.
 
     Mirrors the TradeIT buyer-search picker: five groups in the site's order,
     195 countries, the site's English labels and a flag for each.
+
+    Deliberately no ``default`` / ``default_hs_code``: the picker starts empty so
+    a page load can never preselect a country or an HS code the user did not
+    choose. The form is re-filled from the user's own last submission instead.
     """
     return jsonify(
         {
@@ -900,8 +1435,6 @@ def list_regions():
                 }
                 for code, name_en, name_vi, group_code in regions.COUNTRIES
             ],
-            "default": list(crawler.DEFAULT_REGION_CODES),
-            "default_hs_code": crawler.DEFAULT_HS_CODE,
         }
     )
 

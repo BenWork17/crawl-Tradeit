@@ -39,6 +39,10 @@
       --danger: #e11d48;
     }
     * { box-sizing: border-box; }
+    /* Everything here sets an explicit display (flex/inline-flex), which wins
+       over the user-agent [hidden] rule -- so a hidden button or chip would
+       still be painted. This one rule keeps [hidden] authoritative. */
+    [hidden] { display: none !important; }
     body {
       margin: 0;
       color: var(--text);
@@ -278,6 +282,69 @@
       word-break: break-word;
     }
     :root[data-theme="light"] .payload { background: rgba(15, 23, 42, 0.06); }
+    /* Crawl-form validation feedback stays on the page: the old code used
+       alert(), which a screenshot-free user could dismiss without reading, and
+       a rejected submit used to replace the whole dashboard with raw JSON. */
+    .form-error {
+      display: flex; align-items: flex-start; gap: 12px;
+      margin-top: 16px; padding: 12px 14px; border-radius: 12px;
+      border: 1px solid rgba(251, 113, 133, 0.5);
+      background: rgba(225, 29, 72, 0.14);
+      color: var(--text); font-size: 14px; line-height: 1.5;
+    }
+    :root[data-theme="light"] .form-error { background: rgba(225, 29, 72, 0.08); }
+    .form-error[hidden] { display: none; }
+    .form-error-text { flex: 1 1 auto; }
+    .form-error-title { font-weight: 800; margin-bottom: 2px; }
+    .form-error-dismiss {
+      all: unset; cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1;
+      padding: 2px 4px; border-radius: 6px;
+    }
+    .form-error-dismiss:hover { color: var(--text); }
+    /* Credit-exhaustion banner. A run whose accounts all ran out of credit must
+       not look like a finished job, so it gets a page-level banner instead of
+       only the muted status text. */
+    .credit-banner {
+      display: flex; align-items: flex-start; gap: 12px;
+      margin-bottom: 20px; padding: 16px 18px; border-radius: 16px;
+      border: 1px solid var(--panel-border); background: var(--panel);
+      font-size: 14.5px; line-height: 1.55;
+    }
+    .credit-banner[hidden] { display: none; }
+    .credit-banner.is-warning {
+      border-color: rgba(251, 113, 133, 0.6);
+      background: linear-gradient(135deg, rgba(225, 29, 72, 0.2), rgba(251, 113, 133, 0.08));
+      box-shadow: 0 16px 44px rgba(225, 29, 72, 0.18);
+    }
+    .credit-banner.is-notice {
+      border-color: rgba(245, 158, 11, 0.55);
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(245, 158, 11, 0.05));
+    }
+    .credit-banner-icon { font-size: 22px; line-height: 1.1; flex: 0 0 auto; }
+    .credit-banner-text { flex: 1 1 auto; display: flex; flex-direction: column; gap: 3px; }
+    .credit-banner-title { font-family: "Space Grotesk", "DM Sans", sans-serif; font-weight: 800; font-size: 16px; margin-bottom: 1px; }
+    .credit-banner.is-warning .credit-banner-title { color: var(--danger); }
+    .credit-banner.is-notice .credit-banner-title { color: #b45309; }
+    :root[data-theme="dark"] .credit-banner.is-notice .credit-banner-title { color: #fbbf24; }
+    .credit-banner .mini { color: var(--muted); }
+    /* Remembered-account panel inside the upload box. */
+    .account-state {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      margin-bottom: 10px;
+    }
+    .account-state .pill { font-size: 12.5px; }
+    /* ``.pill`` sets display:inline-flex, which beats the UA [hidden] rule, so
+       an unset chip would otherwise render as an empty outline. */
+    .account-state .pill[hidden] { display: none; }
+    .account-state .pill.is-ok { border-color: rgba(5, 150, 105, 0.5); color: var(--good); }
+    .account-state .pill.is-warn { border-color: rgba(180, 83, 9, 0.5); color: #b45309; }
+    :root[data-theme="dark"] .account-state .pill.is-warn { color: #fbbf24; }
+    .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+    .account-actions .mini { color: var(--muted); }
+    /* The upload box is a dark translucent panel; in light theme that turned
+       into grey-on-grey, so give it a readable surface instead. */
+    :root[data-theme="light"] .upload-box { background: rgba(255, 255, 255, 0.92); border-color: rgba(2, 132, 199, 0.3); }
+    :root[data-theme="light"] .mini { color: #4b5b70; }
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
       .row, .stat-grid, .dataset-bar { grid-template-columns: 1fr; }
@@ -299,6 +366,18 @@
       </div>
     </div>
     <button type="button" id="theme-toggle" class="ghost theme-button" onclick="toggleTheme()">Đổi sáng/tối</button>
+  </div>
+
+  {#- Credit exhaustion is a run-level outcome, so it is announced above both
+      columns rather than buried in the status card. Filled by refreshStatus()
+      from status == "no_credit" (all) or credit_status == "some" (partial). #}
+  <div id="credit-banner" class="credit-banner" role="alert" aria-live="assertive" hidden>
+    <span class="credit-banner-icon" id="credit-banner-icon" aria-hidden="true">⚠</span>
+    <span class="credit-banner-text">
+      <span class="credit-banner-title" id="credit-banner-title"></span>
+      <span id="credit-banner-message"></span>
+      <span class="mini" id="credit-banner-hint"></span>
+    </span>
   </div>
 
   <div class="grid">
@@ -327,18 +406,34 @@
             </div>
           </div>
         </div>
-        <p class="note" style="margin-top: 8px;">Để trống tên bộ dữ liệu thì hệ thống tự đặt theo điều kiện tìm kiếm (ví dụ <code>nl-vn_090411</code>). Mỗi điều kiện khác nhau nên dùng bộ riêng.</p>
+        <p class="note" style="margin-top: 8px;">Để trống tên bộ dữ liệu thì hệ thống tự đặt theo điều kiện tìm kiếm (ví dụ <code>ge_080132</code>). Mỗi điều kiện khác nhau nên dùng bộ riêng.</p>
 
-        <form method="post" action="/api/jobs" enctype="multipart/form-data" onsubmit="return confirmStart(event)">
+        <form id="crawl-form" method="post" action="/api/jobs" enctype="multipart/form-data" novalidate onsubmit="return confirmStart(event)">
           <input type="hidden" id="form_dataset_name" name="dataset_name" value="">
           <input type="hidden" id="form_dataset_explicit" name="dataset_explicit" value="0">
+          {#- A rejected submit re-renders this page with the values the user had
+              just sent. Only then is the object non-empty; on a normal page load
+              it is {} and the form stays empty (or comes from localStorage). #}
+          <script type="application/json" id="submitted-form-values">{{ form_values|tojson }}</script>
           <div class="upload-box">
             <label>File Excel danh sách tài khoản</label>
+            {#- Whether an account file is already remembered decides two things:
+                the summary line below and whether the file input is mandatory.
+                Both are filled from GET /api/accounts by refreshAccounts(). #}
+            <div class="account-state" id="account-state">
+              <span class="pill" id="accounts-summary">Đang kiểm tra tài khoản đã lưu...</span>
+              <span class="pill" id="accounts-backend" hidden></span>
+            </div>
             <input id="accounts_file" name="accounts_file" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" required>
             <div class="helper">
               <div class="mini" id="file-name">Chưa chọn file</div>
               <span class="mini">Sheet đầu tiên, cột: <code>token</code> / <code>refresh_token</code></span>
             </div>
+            <div class="account-actions">
+              <button type="button" class="ghost small" id="accounts-clear" onclick="clearStoredAccounts()" hidden>Xóa tài khoản đã lưu</button>
+              <span class="mini" id="accounts-hint">Tải file mới để thay thế danh sách đã lưu.</span>
+            </div>
+            <p class="mini" id="accounts-message" style="margin:8px 0 0;" hidden></p>
           </div>
 
           <div class="query-block">
@@ -351,7 +446,7 @@
               <div>
                 <label for="hs_code">HS Code <span class="req">*</span></label>
                 <input name="hs_code" id="hs_code" type="text" inputmode="numeric"
-                       placeholder="VD: 090411" maxlength="20" required>
+                       placeholder="VD: 080132" maxlength="20" autocomplete="off" required>
                 <div class="mini" id="hs-hint">2–10 chữ số; dấu chấm/khoảng trắng được tự bỏ.</div>
               </div>
               <div>
@@ -396,12 +491,19 @@
             <div><label>Delay (giây)</label><input name="delay" type="number" min="0" step="0.1" value="1.5"></div>
           </div>
           <label><input name="force" type="checkbox" style="width:auto"> Crawl lại và ghi đè trang đã có</label>
+          <div id="form-error" class="form-error" role="alert" aria-live="assertive"{% if not error %} hidden{% endif %}>
+            <span class="form-error-text">
+              <span class="form-error-title">Không thể bắt đầu crawl</span>
+              <span id="form-error-message">{{ error or '' }}</span>
+            </span>
+            <button type="button" class="form-error-dismiss" onclick="dismissFormError()" aria-label="Đóng thông báo">×</button>
+          </div>
           <div class="actions">
             <button type="submit">Bắt đầu crawl</button>
             <button class="secondary" type="submit" formaction="/api/jobs/stop" formnovalidate>Dừng</button>
           </div>
         </form>
-        <p class="note">Bộ dữ liệu được đặt tên theo điều kiện tìm kiếm (<code>nl-vn_090411</code>). Điều kiện khác nhau phải dùng bộ dữ liệu riêng để không trộn dữ liệu.</p>
+        <p class="note">Bộ dữ liệu được đặt tên theo điều kiện tìm kiếm (<code>ge_080132</code>). Điều kiện khác nhau phải dùng bộ dữ liệu riêng để không trộn dữ liệu.</p>
       </div>
 
       <div class="card files">
@@ -457,6 +559,14 @@
         <div class="stat" style="margin-top: 12px;">
           <div class="label">Điều kiện tìm kiếm</div><div id="query_label" class="value" style="font-size:15px;">{{ job.query_label }}</div>
         </div>
+        {#- Credit counters: "2/3" plus the server's own Vietnamese sentence.
+            Kept in the status card as well as the page-level banner so a partial
+            run (some accounts dead, crawl succeeded) is still visible. #}
+        <div class="stat" style="margin-top: 12px;" id="credit-stat" hidden>
+          <div class="label">Credit tài khoản</div>
+          <div id="credit_label" class="value" style="font-size:15px;"></div>
+          <div id="credit_message" class="mini" style="margin-top:4px;"></div>
+        </div>
         <p id="message" class="note" style="margin-top: 14px;">{{ job.message }}</p>
         <div class="actions">
           <button id="export-button" type="button" onclick="exportSelected()">Tải Excel .xlsx</button>
@@ -468,7 +578,7 @@
 <div id="dataset-modal" class="modal-backdrop" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dataset-modal-title">
     <h2 id="dataset-modal-title">Tạo bộ dữ liệu mới</h2>
-    <p class="note">Đặt tên dễ nhận biết, ví dụ <code>netherland_090411</code> hoặc <code>germany_080510</code>.</p>
+    <p class="note">Đặt tên dễ nhận biết, ví dụ <code>gruzia_080132</code> hoặc <code>germany_080510</code>.</p>
     <label for="new-dataset-name">Tên bộ dữ liệu</label>
     <input id="new-dataset-name" type="text" maxlength="80" placeholder="VD: importer_hscode">
     <p id="dataset-create-message" class="note"></p>
@@ -560,8 +670,172 @@
     return input.value.trim() || 'legacy';
   }
 
-  let regionCatalog = { groups: [], countries: [], default: [], default_hs_code: '' };
+  let regionCatalog = { groups: [], countries: [] };
   const selectedRegions = new Set();
+
+  // --- Nhớ điều kiện tìm kiếm của người dùng ---------------------------------
+  // The crawl form posts to /api/jobs and the server redirects back to "/", so
+  // every crawl reloads the page. Without this the form used to be reset to a
+  // hardcoded country + HS code and the user had to retype the query.
+  // The values live in localStorage; the server-rendered dashboard (after a
+  // rejected submit) is the authoritative source and overrides them.
+  const QUERY_STORAGE_KEY = 'tradeit-last-query';
+  // Filled before the country catalogue arrives: codes are applied to
+  // ``selectedRegions`` once we know which ones exist.
+  let restoredRegionCodes = [];
+  // A rejected submit may carry the dataset the user explicitly picked. The
+  // dataset picker loads independently, so the value is parked here until that
+  // response lands (it would otherwise be reset to the server's current one).
+  let pendingExplicitDataset = '';
+
+  function readOriginValue() {
+    // The current form has no origin picker, but the storage format keeps the
+    // key so adding one later needs no migration.
+    const input = document.getElementById('origin_codes');
+    return input && typeof input.value === 'string' ? input.value.trim() : '';
+  }
+
+  function normalizeQuery(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const hsCode = typeof raw.hsCode === 'string' ? raw.hsCode.trim() : '';
+    const regionCodes = Array.isArray(raw.regionCodes)
+      ? raw.regionCodes
+        .filter(code => typeof code === 'string' && code.trim())
+        .map(code => code.trim().toUpperCase())
+      : [];
+    const origin = typeof raw.origin === 'string' ? raw.origin.trim() : '';
+    if (!hsCode && !regionCodes.length) return null;
+    return { hsCode, regionCodes, origin };
+  }
+
+  function readStoredQuery() {
+    try {
+      return normalizeQuery(JSON.parse(localStorage.getItem(QUERY_STORAGE_KEY) || 'null'));
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function readSubmittedFormValues() {
+    // ``form_values`` is only non-empty when the server rendered the dashboard
+    // because it rejected a POST /api/jobs. That attempt is what the user just
+    // typed, so it wins over the previously stored query.
+    const holder = document.getElementById('submitted-form-values');
+    if (!holder) return null;
+    let data = null;
+    try {
+      data = JSON.parse(holder.textContent || '{}');
+    } catch (err) {
+      return null;
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const hasRegions = (Array.isArray(data.region_codes) && data.region_codes.length > 0)
+      || (Array.isArray(data.countries) && data.countries.length > 0);
+    const hasQuery = (typeof data.hs_code === 'string' && data.hs_code.trim())
+      || hasRegions
+      || (typeof data.dataset_name === 'string' && data.dataset_name.trim());
+    return hasQuery ? data : null;
+  }
+
+  function queryFromSubmitted(data) {
+    const origin = typeof data.origin_codes === 'string'
+      ? data.origin_codes
+      : (Array.isArray(data.origin_codes) ? data.origin_codes.join(',') : '');
+    // ``region_codes`` is what the form posts; ``countries`` is accepted too so
+    // the page keeps working if the server names that context key differently.
+    const codes = Array.isArray(data.region_codes)
+      ? data.region_codes
+      : (Array.isArray(data.countries) ? data.countries : []);
+    return normalizeQuery({
+      hsCode: typeof data.hs_code === 'string' ? data.hs_code : '',
+      regionCodes: codes,
+      origin
+    });
+  }
+
+  function rememberQuery(query) {
+    const normalized = normalizeQuery(query);
+    try {
+      if (normalized) {
+        localStorage.setItem(QUERY_STORAGE_KEY, JSON.stringify(normalized));
+      } else {
+        localStorage.removeItem(QUERY_STORAGE_KEY);
+      }
+    } catch (err) {
+      // Private mode / disabled storage: the form still works, it just does not
+      // survive a reload.
+    }
+  }
+
+  function currentQuerySnapshot() {
+    return {
+      hsCode: document.getElementById('hs_code').value.trim(),
+      regionCodes: [...selectedRegions],
+      origin: readOriginValue()
+    };
+  }
+
+  let querySaveTimer = null;
+  function scheduleQuerySave() {
+    clearTimeout(querySaveTimer);
+    querySaveTimer = setTimeout(() => rememberQuery(currentQuerySnapshot()), 150);
+  }
+
+  function applyQueryToForm(query) {
+    if (!query) return;
+    document.getElementById('hs_code').value = query.hsCode || '';
+    const originInput = document.getElementById('origin_codes');
+    if (originInput && query.origin) originInput.value = query.origin;
+    restoredRegionCodes = query.regionCodes.slice();
+  }
+
+  function applySubmittedFormValues(data) {
+    // Echo every non-query field the user had just sent, so a rejected submit
+    // never costs them the retype. Empty values are left alone: the field keeps
+    // its own default, and no default ever invents a query.
+    const form = document.getElementById('crawl-form');
+    if (!form) return;
+    for (const name of ['start_page', 'end_page', 'per_page', 'delay']) {
+      const value = typeof data[name] === 'string' ? data[name].trim() : '';
+      const field = form.elements[name];
+      if (field && value) field.value = value;
+    }
+    const forceField = form.elements['force'];
+    if (forceField && data.force === true) forceField.checked = true;
+
+    // A dataset the user explicitly picked must stay picked, otherwise the retry
+    // would silently derive a different folder from the query. The picker may
+    // still be loading, so park it and let loadDatasets() apply it.
+    if (data.dataset_explicit === '1' && data.dataset_name) {
+      pendingExplicitDataset = data.dataset_name;
+      document.getElementById('dataset_name').value = data.dataset_name;
+      datasetChosenExplicitly = true;
+      syncDatasetName();
+    }
+  }
+
+  function dismissFormError() {
+    const box = document.getElementById('form-error');
+    if (box) box.hidden = true;
+  }
+
+  function clearFormError() {
+    const box = document.getElementById('form-error');
+    const text = document.getElementById('form-error-message');
+    if (box) box.hidden = true;
+    if (text) text.textContent = '';
+  }
+
+  function showFormError(message) {
+    const box = document.getElementById('form-error');
+    const text = document.getElementById('form-error-message');
+    if (!box || !text) return;
+    text.textContent = message;
+    box.hidden = false;
+    if (typeof box.scrollIntoView === 'function') {
+      box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
   // Only send a dataset name when the user actually picked one. The old code
   // always posted the rendered "legacy" value, which made a new search reuse
   // old pages and show stale results.
@@ -584,19 +858,24 @@
     const response = await fetch('/api/regions');
     if (!response.ok) return;
     regionCatalog = await response.json();
-    const byCode = new Map(regionCatalog.countries.map(c => [c.code, c]));
 
-    if (!document.getElementById('hs_code').value) {
-      document.getElementById('hs_code').value = regionCatalog.default_hs_code || '';
-    }
-    (regionCatalog.default || []).forEach(code => selectedRegions.add(code));
+    // No defaults here on purpose: the picker used to preselect a country and
+    // fill the HS code from the catalogue, so every page load silently replaced
+    // whatever the user had typed. The query now comes from the user's own
+    // submission (server-rendered) or from localStorage, never the catalogue.
+    const known = new Set(regionCatalog.countries.map(c => c.code));
+    restoredRegionCodes
+      .filter(code => known.has(code))
+      .forEach(code => selectedRegions.add(code));
+    restoredRegionCodes = [];
 
     renderRegionList();
     renderRegionChips();
     updatePayloadPreview();
-    document.getElementById('region-message').textContent =
-      `${regionCatalog.countries.length} quốc gia trong danh mục.`;
-    void byCode;
+    const count = regionCatalog.countries.length;
+    document.getElementById('region-message').textContent = count
+      ? `${count} quốc gia trong danh mục.`
+      : 'Không tải được danh mục quốc gia.';
   }
 
   function regionQuery() {
@@ -658,6 +937,7 @@
     if (checked) selectedRegions.add(code); else selectedRegions.delete(code);
     renderRegionChips();
     updatePayloadPreview();
+    scheduleQuerySave();
   }
 
   function toggleGroup(code, checked) {
@@ -669,6 +949,7 @@
     renderRegionList();
     renderRegionChips();
     updatePayloadPreview();
+    scheduleQuerySave();
   }
 
   function renderRegionChips() {
@@ -700,6 +981,7 @@
     renderRegionList();
     renderRegionChips();
     updatePayloadPreview();
+    scheduleQuerySave();
   }
 
   function quickSelect(preset) {
@@ -713,6 +995,7 @@
     renderRegionList();
     renderRegionChips();
     updatePayloadPreview();
+    scheduleQuerySave();
   }
 
   let previewTimer = null;
@@ -755,15 +1038,42 @@
   }
 
   function confirmStart(event) {
+    // Only the "Bắt đầu crawl" button runs this validation. The "Dừng" button
+    // posts to /api/jobs/stop with formnovalidate and must stay usable even when
+    // the crawl fields are empty.
+    const submitter = event.submitter;
+    const action = (submitter && submitter.formAction) || (event.target && event.target.action) || '';
+    const isStop = action.indexOf('/api/jobs/stop') !== -1
+      || Boolean(submitter && submitter.hasAttribute('formnovalidate'));
+    if (isStop) {
+      return true;
+    }
+    clearFormError();
+
     const hsCode = document.getElementById('hs_code').value.trim();
     if (!hsCode) {
-      alert('Vui lòng nhập HS Code.');
       event.preventDefault();
+      showFormError('Vui lòng nhập HS Code trước khi bắt đầu crawl.');
+      document.getElementById('hs_code').focus();
       return false;
     }
     if (!selectedRegions.size) {
-      alert('Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng.');
       event.preventDefault();
+      showFormError('Vui lòng chọn ít nhất một quốc gia/vùng nhập hàng.');
+      document.getElementById('region_search').focus();
+      return false;
+    }
+
+    // The account file is optional while a usable list is remembered: the
+    // server reuses it. Only ask for a file when nothing is stored (or the
+    // stored copy is unusable), which is exactly what /api/accounts reports.
+    const fileInput = document.getElementById('accounts_file');
+    const hasFreshFile = Boolean(fileInput && fileInput.files && fileInput.files.length);
+    const hasStoredAccounts = Boolean(storedAccounts.has_accounts);
+    if (!hasFreshFile && !hasStoredAccounts) {
+      event.preventDefault();
+      showFormError('Chưa có danh sách tài khoản nào được lưu. Hãy upload file Excel tài khoản (cột token / refresh_token) để bắt đầu.');
+      if (fileInput) fileInput.focus();
       return false;
     }
 
@@ -777,8 +1087,222 @@
       input.value = code;
       form.appendChild(input);
     });
+    // Persist first: the browser may leave the page immediately after this
+    // handler returns true, so a debounced save would never run.
+    rememberQuery(currentQuerySnapshot());
+    clearTimeout(querySaveTimer);
     syncDatasetName();
     return true;
+  }
+
+  // --- Tài khoản đã lưu (nhớ file Excel giữa các lần crawl) ------------------
+  // The server keeps the last uploaded account list, so the user does not have
+  // to re-upload for every crawl. This block mirrors that state: it shows the
+  // count + timestamp, keeps the file input optional while accounts exist, and
+  // offers a clear action. It never sees a token -- /api/accounts is counts and
+  // timestamps only, and the filesystem path is deliberately not exposed.
+  let storedAccounts = { count: 0, updated_at: null, state: 'missing', message: '', has_accounts: false, needs_upload: true };
+  let accountsBusy = false;
+  // Result of the last account action ("Đã xóa danh sách tài khoản đã lưu"), so
+  // the clear button can confirm itself without a modal or an alert().
+  let accountNotice = '';
+
+  function formatAccountTime(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('vi-VN', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function accountBackendLabel(info) {
+    const backend = String(info.backend || '');
+    if (backend === 'supabase') return 'Lưu trữ: Supabase';
+    if (backend === 'file-fallback') return 'Lưu trữ: file tạm';
+    if (backend === 'file') return 'Lưu trữ: file';
+    return '';
+  }
+
+  // The server treats an absent ``accounts_file`` part as "reuse the stored
+  // list". A file input with nothing chosen would still submit an empty part, so
+  // the field keeps its name only while a file is actually selected.
+  function syncAccountsFilePart() {
+    const input = document.getElementById('accounts_file');
+    if (!input) return;
+    const chosen = Boolean(input.files && input.files.length);
+    if (chosen) {
+      input.setAttribute('name', 'accounts_file');
+    } else {
+      input.removeAttribute('name');
+    }
+  }
+
+  function renderAccountsState() {
+    const summary = document.getElementById('accounts-summary');
+    const backend = document.getElementById('accounts-backend');
+    const input = document.getElementById('accounts_file');
+    const clearButton = document.getElementById('accounts-clear');
+    const hint = document.getElementById('accounts-hint');
+    const message = document.getElementById('accounts-message');
+    if (!summary || !input) return;
+
+    const count = Number(storedAccounts.count || 0);
+    const has = Boolean(storedAccounts.has_accounts);
+    const when = formatAccountTime(storedAccounts.updated_at);
+
+    // The input stays omissible exactly while a usable list is remembered:
+    // required only when the server says an upload is needed.
+    input.required = !has;
+    input.setAttribute('aria-required', has ? 'false' : 'true');
+    syncAccountsFilePart();
+
+    summary.className = 'pill' + (has ? ' is-ok' : ' is-warn');
+    if (has) {
+      summary.textContent = `Đã lưu ${count} tài khoản${when ? ` lúc ${when}` : ''}`;
+    } else if (storedAccounts.state === 'corrupt' || storedAccounts.state === 'unreadable') {
+      summary.textContent = 'Danh sách tài khoản đã lưu bị lỗi — cần upload lại';
+    } else if (storedAccounts.state === 'empty') {
+      summary.textContent = 'File tài khoản đã lưu không có tài khoản nào';
+    } else {
+      summary.textContent = 'Chưa có tài khoản nào được lưu';
+    }
+
+    const backendLabel = accountBackendLabel(storedAccounts);
+    if (backend) {
+      backend.textContent = backendLabel;
+      backend.hidden = !backendLabel;
+    }
+    if (clearButton) clearButton.hidden = !has;
+    if (hint) {
+      hint.textContent = has
+        ? 'Tải file mới để thay thế danh sách đã lưu.'
+        : 'Upload file Excel tài khoản để bắt đầu crawl.';
+    }
+    if (message) {
+      // The fallback warning outranks the transient notice; otherwise show the
+      // last action's result (e.g. "Đã xóa danh sách tài khoản đã lưu"). The
+      // summary pill above already says whether accounts are missing, so that
+      // text is not repeated here.
+      const text = storedAccounts.backend === 'file-fallback'
+        ? 'Lưu trữ tạm thời: danh sách tài khoản có thể mất khi máy chủ khởi động lại.'
+        : accountNotice;
+      message.textContent = text;
+      message.hidden = !text;
+    }
+  }
+
+  async function refreshAccounts() {
+    try {
+      const response = await fetch('/api/accounts');
+      if (!response.ok) return storedAccounts;
+      const data = await response.json();
+      storedAccounts = { ...storedAccounts, ...data };
+      renderAccountsState();
+    } catch (err) {
+      // Network hiccup: keep the last known state instead of claiming "none".
+    }
+    return storedAccounts;
+  }
+
+  async function clearStoredAccounts() {
+    if (accountsBusy) return;
+    const button = document.getElementById('accounts-clear');
+    accountsBusy = true;
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch('/api/accounts/clear', { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 409) {
+        // Deliberate refusal while a crawl is in flight: show it as such.
+        showFormError(data.error || 'Không xóa được danh sách tài khoản khi đang crawl.');
+        return;
+      }
+      if (!response.ok) {
+        showFormError(data.error || 'Không xóa được danh sách tài khoản.');
+        return;
+      }
+      // The clear response carries the summary but not the backend, so merge
+      // only the keys it actually reports -- a stale "Lưu trữ: ..." chip would
+      // otherwise survive with no accounts left to store.
+      const { backend, fallback_reason, ...summary } = data;
+      void backend; void fallback_reason;
+      storedAccounts = { ...storedAccounts, ...summary };
+      if (!storedAccounts.has_accounts) {
+        delete storedAccounts.backend;
+        delete storedAccounts.fallback_reason;
+      }
+      accountNotice = data.message || 'Đã xóa danh sách tài khoản đã lưu.';
+      renderAccountsState();
+      document.getElementById('file-name').textContent = 'Chưa chọn file';
+      document.getElementById('accounts_file').value = '';
+      clearFormError();
+    } catch (err) {
+      showFormError('Không xóa được danh sách tài khoản.');
+    } finally {
+      accountsBusy = false;
+      if (button) button.disabled = false;
+    }
+  }
+
+  // --- Credit exhaustion ----------------------------------------------------
+  // A run that burned through every account ends with status "no_credit"; a run
+  // that lost some but not all ends "completed" with credit_status "some". Both
+  // must be visible, and the first must not read like a normal finished job.
+  let lastStatusKey = '';
+
+  function renderCreditState(data) {
+    const banner = document.getElementById('credit-banner');
+    const stat = document.getElementById('credit-stat');
+    const label = document.getElementById('credit_label');
+    const creditMessage = document.getElementById('credit_message');
+    if (!banner) return;
+
+    const status = String(data.status || '');
+    const creditStatus = String(data.credit_status || '');
+    const exhausted = Number(data.credit_exhausted || 0);
+    const total = Number(data.credit_total || 0);
+    const creditLabel = String(data.credit_label || (total ? `${exhausted}/${total}` : ''));
+    const creditText = String(data.credit_message || '');
+    const allExhausted = status === 'no_credit' || creditStatus === 'all';
+    const partial = !allExhausted && creditStatus === 'some' && exhausted > 0;
+
+    // Status-card counters (visible for any non-zero exhaustion).
+    if (stat && label && creditMessage) {
+      const showStat = (total > 0) && (allExhausted || partial);
+      stat.hidden = !showStat;
+      label.textContent = showStat ? `Hết credit: ${creditLabel || `${exhausted}/${total}`}` : '';
+      creditMessage.textContent = showStat ? creditText : '';
+    }
+
+    banner.classList.remove('is-warning', 'is-notice');
+    if (allExhausted && (total > 0 || creditStatus === 'all' || status === 'no_credit')) {
+      banner.hidden = false;
+      banner.classList.add('is-warning');
+      document.getElementById('credit-banner-icon').textContent = '⚠';
+      document.getElementById('credit-banner-title').textContent =
+        'Tất cả tài khoản đã hết credit — cần upload file Excel tài khoản mới';
+      document.getElementById('credit-banner-message').textContent = creditText
+        || (data.message || '');
+      document.getElementById('credit-banner-hint').textContent =
+        'Crawl đã dừng vì không còn tài khoản nào dùng được. Chọn file mới ở mục "File Excel danh sách tài khoản" rồi bắt đầu lại.';
+    } else if (partial) {
+      banner.hidden = false;
+      banner.classList.add('is-notice');
+      document.getElementById('credit-banner-icon').textContent = '!';
+      document.getElementById('credit-banner-title').textContent =
+        `Một số tài khoản đã hết credit (${creditLabel || `${exhausted}/${total}`})`;
+      document.getElementById('credit-banner-message').textContent = creditText
+        || `${exhausted}/${total} tài khoản đã hết credit, còn ${Math.max(0, total - exhausted)} tài khoản dùng được.`;
+      document.getElementById('credit-banner-hint').textContent =
+        'Nên thay danh sách tài khoản trước lần crawl tiếp theo.';
+    } else {
+      banner.hidden = true;
+      document.getElementById('credit-banner-title').textContent = '';
+      document.getElementById('credit-banner-message').textContent = '';
+      document.getElementById('credit-banner-hint').textContent = '';
+    }
   }
 
   function bindUi() {
@@ -788,7 +1312,19 @@
     const fileName = document.getElementById('file-name');
 
     fileInput.addEventListener('change', function() {
-      fileName.textContent = fileInput.files.length ? fileInput.files[0].name : 'Chưa chọn file';
+      const chosen = fileInput.files.length > 0;
+      fileName.textContent = chosen ? fileInput.files[0].name : 'Chưa chọn file';
+      syncAccountsFilePart();
+      if (chosen) {
+        // Picking a file is the "replace" action: say so, and drop the stale
+        // "no accounts stored" error that pointed at a missing upload.
+        document.getElementById('accounts-hint').textContent =
+          'File này sẽ thay thế danh sách tài khoản đã lưu khi bắt đầu crawl.';
+        if (!storedAccounts.has_accounts) clearFormError();
+      } else {
+        document.getElementById('accounts-hint').textContent =
+          'Tải file mới để thay thế danh sách đã lưu.';
+      }
     });
     datasetSelect.addEventListener('change', async function() {
       if (datasetSelect.value !== '__custom__') {
@@ -806,7 +1342,11 @@
       await loadFiles();
     });
     document.getElementById('region_search').addEventListener('input', renderRegionList);
-    document.getElementById('hs_code').addEventListener('input', updatePayloadPreview);
+    document.getElementById('hs_code').addEventListener('input', function() {
+      clearFormError();
+      updatePayloadPreview();
+      scheduleQuerySave();
+    });
     document.getElementById('dataset-delete-confirm').addEventListener('input', onDeleteConfirmInput);
   }
 
@@ -929,7 +1469,13 @@
       '<option value="__custom__">Tạo / nhập bộ dữ liệu mới...</option>',
       ...data.datasets.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.label)}${item.files ? ` (${item.files})` : ''}</option>`)
     ].join('');
-    const current = data.current || input.value || 'legacy';
+    // A rejected submit may have carried an explicitly chosen dataset; that
+    // choice outranks the server's current one, otherwise the retry would land
+    // in a different folder than the one the user picked.
+    const current = pendingExplicitDataset
+      || (data.current || input.value || 'legacy');
+    const explicit = Boolean(pendingExplicitDataset);
+    pendingExplicitDataset = '';
     input.value = current;
     if ([...select.options].some(option => option.value === current)) {
       select.value = current;
@@ -937,7 +1483,7 @@
       select.value = '__custom__';
     }
     // Just opening the page must not mark the dataset as chosen by the user.
-    datasetChosenExplicitly = false;
+    datasetChosenExplicitly = explicit;
     syncDatasetName();
     document.getElementById('dataset_name_status').textContent = current;
     document.getElementById('current-dataset').textContent = `Đang xem bộ dữ liệu: ${current}`;
@@ -1249,21 +1795,59 @@
     }
   }
 
-  async function refreshStatus() {    const data = await fetch('/api/status').then(r => r.json());
+  async function refreshStatus() {
+    const data = await fetch('/api/status').then(r => r.json());
     for (const key of ['status', 'page', 'records', 'message', 'account_label', 'query_label']) {
       const el = document.getElementById(key);
       if (el) el.textContent = data[key] || (key === 'query_label' ? '—' : (data[key] ?? '-'));
     }
     document.getElementById('account_index').textContent = `${data.account_index ?? 0}/${data.account_total ?? 0}`;
     document.getElementById('dataset_name_status').textContent = data.dataset_name ?? currentDataset();
+
+    // Credit state is rendered every poll: the server publishes it while a run
+    // progresses and when it ends, so the banner never lags behind the counters.
+    renderCreditState(data);
+
+    // A finished run that used stored accounts, or one that ended with no
+    // credit, means /api/accounts may have changed underneath us -- but only
+    // re-fetch on a status transition, not on every 2-second tick.
+    const statusKey = `${data.status || ''}|${data.credit_status || ''}|${data.accounts_source || ''}`;
+    if (statusKey !== lastStatusKey) {
+      lastStatusKey = statusKey;
+      if (String(data.status || '') !== 'running') refreshAccounts();
+    }
+  }
+
+  async function initQueryForm() {
+    // Order matters: the server-rendered values of a rejected submit are the
+    // freshest truth; localStorage is only the fallback for a reload or for the
+    // redirect that follows a successful crawl.
+    const submitted = readSubmittedFormValues();
+    const submittedQuery = submitted ? queryFromSubmitted(submitted) : null;
+    const stored = submitted ? null : readStoredQuery();
+    applyQueryToForm(submittedQuery || stored);
+    if (submitted) applySubmittedFormValues(submitted);
+    // Persist from the submitted data, not from the DOM: the region chips are
+    // only rebuilt once the country catalogue arrives below.
+    if (submittedQuery) rememberQuery(submittedQuery);
+
+    try {
+      await loadRegions();
+    } catch (err) {
+      document.getElementById('region-message').textContent = 'Không tải được danh mục quốc gia.';
+    }
+
+    // The banner itself is rendered by the server for a rejected submit; only a
+    // client-side validation failure needs it built in confirmStart().
+    if (submitted) updatePayloadPreview();
   }
 
   initTheme();
   bindUi();
-  loadRegions().catch(() => {
-    document.getElementById('region-message').textContent = 'Không tải được danh mục quốc gia.';
-  });
+  initQueryForm();
   loadDatasets().then(loadFiles);
+  refreshAccounts().then(renderAccountsState);
+  refreshStatus();
   setInterval(refreshStatus, 2000);
   setInterval(loadFiles, 8000);
 </script>
