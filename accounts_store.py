@@ -139,9 +139,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 ENV_DATA_DIR = "TRADEIT_DATA_DIR"
 ENV_ACCOUNTS_FILE = "TRADEIT_ACCOUNTS_FILE"
 
-# Supabase backend (optional).  Setting both URL and KEY switches the backend.
+# Supabase backend (optional).  Setting both URL and a key switches the backend.
 ENV_SUPABASE_URL = "SUPABASE_URL"
+# New Supabase projects expose ``sb_secret_...`` / ``sb_publishable_...`` keys
+# instead of the legacy JWT pair, so accept either name.  Order matters: the
+# secret key bypasses RLS and is the one this server-side store needs; a
+# publishable key would be blocked by RLS unless a policy is added.
 ENV_SUPABASE_KEY = "SUPABASE_KEY"
+ENV_SUPABASE_KEY_NAMES: tuple[str, ...] = (
+    "SUPABASE_KEY",
+    "SUPABASE_SECRET_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+)
 ENV_SUPABASE_TABLE = "SUPABASE_TABLE"
 SUPABASE_DEFAULT_TABLE = "tradeit_accounts"
 # Single-row table: the whole account list lives in one ``accounts`` jsonb cell.
@@ -261,15 +270,33 @@ class _SupabaseError(Exception):
     """Internal: a Supabase call failed. Message is safe to log/return."""
 
 
+def _supabase_key() -> str:
+    """Return the first configured Supabase key, or ``""``.
+
+    Accepts ``SUPABASE_KEY`` plus the newer project key names, so either the
+    legacy JWT/service_role value or the new ``sb_secret_...`` key works
+    without renaming anything in the Render dashboard.
+    """
+    for name in ENV_SUPABASE_KEY_NAMES:
+        value = os.environ.get(name, "").strip()
+        if value:
+            if name != ENV_SUPABASE_KEY and not os.environ.get(ENV_SUPABASE_KEY):
+                # Making the fallback visible saves a lot of confusion when
+                # only SUPABASE_SECRET_KEY was set.
+                logger.info("Dùng %s làm Supabase key", name)
+            return value
+    return ""
+
+
 def _supabase_config() -> tuple[str, str, str] | None:
     """Return ``(url, key, table)`` when Supabase is configured, else ``None``.
 
-    Both ``SUPABASE_URL`` and ``SUPABASE_KEY`` must be set; the table defaults to
-    :data:`SUPABASE_DEFAULT_TABLE`.  Reading the environment on every call means
-    a Render restart can switch backends without a code change.
+    The URL and any of :data:`ENV_SUPABASE_KEY_NAMES` must be set; the table
+    defaults to :data:`SUPABASE_DEFAULT_TABLE`.  Reading the environment on every
+    call means a Render restart can switch backends without a code change.
     """
     url = os.environ.get(ENV_SUPABASE_URL, "").strip()
-    key = os.environ.get(ENV_SUPABASE_KEY, "").strip()
+    key = _supabase_key()
     if not url or not key:
         return None
 

@@ -302,11 +302,22 @@ Toàn bộ danh sách nằm ở hàng `id = 'default'`, cột `accounts` có d�
 | Biến | Bắt buộc | Ý nghĩa |
 |------|----------|---------|
 | `SUPABASE_URL` | có | Project URL, ví dụ `https://abcdefgh.supabase.co` |
-| `SUPABASE_KEY` | có | `service_role` key |
+| `SUPABASE_SECRET_KEY` | có | Secret key dạng mới `sb_secret_…` |
+| `SUPABASE_KEY` | (thay thế) | Tên cũ, dùng cho key `service_role` kiểu JWT |
 | `SUPABASE_TABLE` | không | Tên bảng, mặc định `tradeit_accounts` |
 
-Chỉ cần đặt **cả** `SUPABASE_URL` và `SUPABASE_KEY` là backend Supabase tự bật.
-Đặt một trong hai thì vẫn dùng file cục bộ.
+Code chấp nhận **một trong ba** tên key, theo thứ tự: `SUPABASE_KEY` →
+`SUPABASE_SECRET_KEY` → `SUPABASE_SERVICE_ROLE_KEY`. Nghĩa là project mới (key
+`sb_secret_…`) đặt `SUPABASE_SECRET_KEY`, project cũ (JWT `service_role`) đặt
+`SUPABASE_KEY` — cả hai đều chạy, không cần đổi code.
+
+Chỉ cần đặt `SUPABASE_URL` và **một** key là backend Supabase tự bật. Thiếu một
+trong hai thì vẫn dùng file cục bộ.
+
+> **Các key Supabase KHÔNG được dùng:**
+> - `sb_publishable_…` / `anon` — RLS sẽ chặn (bảng không có policy), app rơi về
+>   file tạm và báo `SUPABASE_KEY sai hoặc thiếu quyền (HTTP 401/403)`.
+> - `SUPABASE_JWKS_URL` — chỉ dùng để xác thực JWT ở phía Auth, app này không cần.
 
 > **Không bao giờ commit key** vào repo. `requirements.txt`, README và code chỉ
 > đọc từ biến môi trường; key không được ghi ra log, không nằm trong
