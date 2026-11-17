@@ -20,6 +20,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
 import accounts_store
+import dataset_store
 import merge_data
 import regions
 import tradeit_crawler as crawler
@@ -303,6 +304,26 @@ def _dataset_page_files(name: str) -> list[Path]:
         return []
     pages = [path for path in data_dir.glob("*.json") if merge_data.page_number(path) < 10**9]
     return sorted(pages, key=merge_data.page_number)
+
+
+def _restore_dataset_if_empty(name: str) -> None:
+    """Pull a dataset back from Supabase Storage when the disk has none of it.
+
+    On Render's free plan the container filesystem is wiped on every redeploy,
+    so a dataset the dashboard lists can have no local files at all. This is
+    best-effort: a Storage failure leaves the empty local state alone and the
+    caller reports it, rather than raising into a page render.
+    """
+    if not dataset_store.configured():
+        return
+    if _dataset_page_files(name):
+        return
+    try:
+        dataset_store.download_dataset(
+            name, _dataset_data_dir(name), _dataset_state_file(name)
+        )
+    except Exception as exc:  # noqa: BLE001 - never break a read path
+        print(f"[WARN] Không khôi phục được '{name}' từ Supabase Storage: {exc}")
 
 
 def _dataset_summary(name: str) -> dict[str, Any]:
@@ -1043,6 +1064,21 @@ def _run(options: dict[str, Any]) -> None:
                     for item in items:
                         seen.add(_fingerprint(item))
 
+                    # Mirror the page to Supabase Storage immediately, so a
+                    # redeploy mid-crawl loses at most the page in flight.
+                    # A Storage failure must never abort the crawl: the local
+                    # file is the working copy and disk still has it.
+                    backup_note = ""
+                    if dataset_store.configured():
+                        result = dataset_store.upload_file(
+                            dataset_name, data_dir / f"{page}.json"
+                        )
+                        if not result.ok:
+                            backup_note = f" (chưa sao lưu: {result.detail})"
+                            _update(run_id, backup_error=result.detail)
+                        else:
+                            _update(run_id, backup_error="")
+
                     _update(
                         run_id,
                         page=page,
@@ -1051,6 +1087,7 @@ def _run(options: dict[str, Any]) -> None:
                         message=(
                             f"Tài khoản {account_index}/{len(accounts)}: "
                             f"trang {page} đã lưu {len(items)} bản ghi"
+                            f"{backup_note}"
                         ),
                     )
                     crawler.save_state(page, total, len(seen), query, state_file)
@@ -1500,6 +1537,47 @@ def dataset_summary(dataset: str):
     return jsonify(_dataset_summary(name))
 
 
+@app.get("/api/storage")
+def storage_status():
+    """Report whether datasets are being mirrored to Supabase Storage."""
+    return jsonify(
+        {
+            "active": dataset_store.active(),
+            "configured": dataset_store.configured(),
+            "bucket": dataset_store.bucket(),
+            "env_var": dataset_store.ENV_BUCKET,
+        }
+    )
+
+
+@app.post("/api/datasets/<dataset>/backup")
+def backup_dataset(dataset: str):
+    """Push an existing dataset's pages to Supabase Storage on demand."""
+    if not dataset_store.configured():
+        return jsonify(
+            {
+                "error": "Chưa cấu hình Supabase Storage. Đặt biến "
+                f"{dataset_store.ENV_BUCKET} (và SUPABASE_URL + key) rồi thử lại."
+            }
+        ), 400
+    try:
+        name = _require_dataset(dataset)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+    result = dataset_store.upload_dataset(
+        name, _dataset_data_dir(name), _dataset_state_file(name)
+    )
+    payload = {
+        "message": result.detail or ("Đã sao lưu" if result.ok else "Chưa sao lưu được"),
+        "count": result.count,
+        "bucket": dataset_store.bucket(),
+    }
+    return jsonify(payload), (200 if result.ok else 502)
+
+
 @app.get("/api/datasets/<dataset>/download")
 def download_dataset(dataset: str):
     """Download every page file of a dataset as one ZIP archive."""
@@ -1546,6 +1624,8 @@ def list_files():
         with job_lock:
             dataset_name = str(job.get("dataset_name", LEGACY_DATASET_NAME))
     dataset_name = _ensure_dataset(dataset_name)
+    # After a redeploy the disk is empty but Storage still has the pages.
+    _restore_dataset_if_empty(dataset_name)
     files = []
     for path in _dataset_page_files(dataset_name):
         page = merge_data.page_number(path)

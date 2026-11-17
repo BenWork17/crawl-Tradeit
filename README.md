@@ -324,7 +324,52 @@ trong hai thì vẫn dùng file cục bộ.
 > `/api/accounts`, và không xuất hiện trong thông báo lỗi. Nếu key lộ, hãy
 > **rotate** ngay trong Supabase.
 
-### 4. Các biến môi trường khác (tuỳ chọn)
+### 4. Sao lưu bộ dữ liệu đã crawl lên Supabase Storage
+
+Phần trên chỉ lưu **tài khoản**. Các trang đã crawl (`<trang>.json`), `state.json`
+và file Excel vẫn nằm trên filesystem tạm của Render free, nên **mất khi
+redeploy**. Để giữ luôn bộ dữ liệu, bật thêm Supabase **Storage**:
+
+1. **Storage → New bucket**, đặt tên `tradeit-data`, để **Private** (không public
+   — dữ liệu thương mại không nên hở). Nếu chưa tạo, app cũng tự tạo được bằng
+   API khi bucket chưa tồn tại.
+2. Thêm biến môi trường (cùng `SUPABASE_URL` + key ở trên):
+
+| Biến | Bắt buộc | Ý nghĩa |
+|------|----------|---------|
+| `SUPABASE_STORAGE_BUCKET` | có | Tên bucket, ví dụ `tradeit-data` |
+
+Cách hoạt động:
+
+- Đĩa **vẫn là bản làm việc chính** — crawler ghi trang xuống đĩa như cũ, rồi
+  **đẩy ngay từng trang** lên Storage sau khi lưu xong. Redeploy giữa lúc crawl
+  chỉ mất tối đa trang đang chạy dở.
+- Sau redeploy, khi bạn mở một bộ dữ liệu mà đĩa trống, app **tự khôi phục** các
+  trang từ Storage (chỉ tải file còn thiếu, không ghi đè file đã có).
+- Nút **Sao lưu** (`POST /api/datasets/<tên>/backup`) đẩy toàn bộ bộ dữ liệu hiện
+  có lên Storage khi bạn muốn.
+- `GET /api/storage` cho biết đang bật hay tắt và tên bucket.
+
+Cấu trúc object trên Storage:
+
+```
+tradeit-data/
+└── <tên-bộ-dữ-liệu>/
+    ├── data/1.json, 2.json, …
+    └── state.json
+```
+
+Đây là bản sao 1-1 của thư mục trên đĩa, nên khôi phục chỉ là copy file.
+
+> **Dung lượng:** mỗi trang ~58 KB; một lần crawl đầy đủ (~786 trang) ~45 MB.
+> Gói free của Supabase Storage cho 1 GB ⇒ khoảng **20 bộ dữ liệu đầy đủ**. Nên
+> xoá bộ không dùng, hoặc tải ZIP về rồi xoá.
+
+> Nếu Storage lỗi (mạng, sai bucket, hết dung lượng), crawl **vẫn chạy bình
+> thường** trên đĩa và job ghi `backup_error` để dashboard hiện cảnh báo — dữ
+> liệu không bị mất, chỉ là chưa được sao lưu.
+
+### 5. Các biến môi trường khác (tuỳ chọn)
 
 Thứ tự chọn nơi lưu của backend file (dùng khi **không** cấu hình Supabase, hoặc
 khi truyền `path=`):
