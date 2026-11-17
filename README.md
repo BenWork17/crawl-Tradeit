@@ -257,9 +257,10 @@ không đổi gì và **không phát sinh request mạng nào**.
 1. Vào <https://supabase.com>, tạo project mới (gói free là đủ).
 2. Vào **Project Settings → API**, lấy:
    - **Project URL** — dạng `https://<project-ref>.supabase.co`
-   - **service_role key** (mục *Project API keys*). Dùng `service_role` vì bảng
-     không bật RLS; khoá này bỏ qua RLS và chỉ được dùng ở server, **không** đưa
-     vào trình duyệt.
+   - **service_role key** (mục *Project API keys*). Đây là key **bắt buộc** cho
+     cấu hình trong mục 2 bên dưới: bảng có bật RLS mà **không tạo policy**, nên
+     chỉ `service_role` (bỏ qua RLS) mới đọc/ghi được. Key này chỉ dùng ở server,
+     **không** đưa vào trình duyệt hay commit vào repo.
 
 ### 2. Tạo bảng
 
@@ -273,10 +274,19 @@ create table if not exists public.tradeit_accounts (
     updated_at timestamptz not null default now()
 );
 
--- Bảng chỉ được truy cập bằng service_role key từ server.
--- Bật RLS và không tạo policy: khoá anon/public không đọc được gì.
+-- Bắt buộc: bảng chứa token nên phải bật RLS.
+-- Cố ý KHÔNG tạo policy nào: anon/public không đọc, không ghi được gì.
+-- Chỉ service_role key (dùng ở server) bỏ qua RLS nên vẫn truy cập được.
 alter table public.tradeit_accounts enable row level security;
 ```
+
+> Nếu bạn **không** bật RLS thì app vẫn chạy với `service_role`, nhưng bảng sẽ
+> hở: bất kỳ ai có `anon` key (key này công khai trong mọi app Supabase) cũng đọc
+> được token. Vì vậy đừng bỏ dòng `enable row level security`.
+
+> Dùng `anon` key thay cho `service_role` sẽ **hỏng** với cấu hình trên: RLS chặn
+> mọi truy cập vì không có policy. Muốn dùng `anon` thì phải tự tạo policy cho
+> đúng nhu cầu — đơn giản nhất là cứ dùng `service_role` ở server.
 
 Toàn bộ danh sách nằm ở hàng `id = 'default'`, cột `accounts` có dạng:
 
