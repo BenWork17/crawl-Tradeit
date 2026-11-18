@@ -105,6 +105,13 @@ job: dict[str, Any] = {
     "credit_message": "",
     # Where this run's accounts came from: "upload", "stored", or "" (no run).
     "accounts_source": "",
+    # Credit reported by the API on the last page, and whether the run stopped
+    # before reaching the API's own total. ``incomplete`` is what tells the UI
+    # "we stored fewer records than exist" instead of pretending success.
+    "credit_remaining": None,
+    "incomplete": False,
+    "short_by": 0,
+    "backup_error": "",
 }
 stop_event = threading.Event()
 ALLOWED_ACCOUNT_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
@@ -269,12 +276,36 @@ def _dataset_exists(name: str) -> bool:
     return data_dir.is_dir() and any(data_dir.glob("*.json"))
 
 
+def _remote_dataset_names() -> dict[str, int]:
+    """Datasets that exist in Supabase Storage, with their page counts.
+
+    On Render the container filesystem is wiped on redeploy, so the local
+    ``datasets/`` folder can be empty while Storage still holds every dataset.
+    Listing only the disk made the picker look empty even though the data was
+    safe. Failures are non-fatal: an unreachable bucket just means "no extra
+    datasets", never a broken page.
+    """
+    if not dataset_store.configured():
+        return {}
+    try:
+        counts = dataset_store.dataset_page_counts()
+    except Exception as exc:  # noqa: BLE001 - a listing fault must not break the UI
+        print(f"[WARN] Không liệt kê được bộ dữ liệu trên Supabase Storage: {exc}")
+        return {}
+    return counts
+
+
 def _list_datasets() -> list[dict[str, Any]]:
     names = [LEGACY_DATASET_NAME]
     if DATASETS_ROOT.is_dir():
         for path in DATASETS_ROOT.iterdir():
             if path.is_dir():
                 names.append(path.name)
+    remote = _remote_dataset_names()
+    for name in sorted(remote):
+        if name not in names:
+            names.append(name)
+
     unique = []
     seen = set()
     for name in names:
@@ -282,11 +313,18 @@ def _list_datasets() -> list[dict[str, Any]]:
             continue
         seen.add(name)
         data_dir = _dataset_data_dir(name)
+        local_files = len(list(data_dir.glob("*.json"))) if data_dir.is_dir() else 0
+        remote_files = remote.get(name, 0)
+        # Files can be on disk, in Storage, or both; the user cares about the
+        # total they can open, and "remote" tells the UI it is not local yet.
         unique.append(
             {
                 "name": name,
                 "label": _dataset_display_name(name),
-                "files": len(list(data_dir.glob("*.json"))) if data_dir.is_dir() else 0,
+                "files": max(local_files, remote_files),
+                "local_files": local_files,
+                "remote_files": remote_files,
+                "in_storage": remote_files > 0,
             }
         )
     return unique
@@ -308,9 +346,14 @@ def _require_dataset(name: str) -> str:
 
     Read-only routes must not call ``_ensure_dataset``: it creates folders, so a
     mistyped name would silently produce an empty dataset instead of an error.
+
+    A dataset that exists only in Supabase Storage still counts as existing:
+    after a redeploy the disk is empty but its pages are in the bucket.
     """
     dataset = _clean_dataset_name(name)
     if dataset == LEGACY_DATASET_NAME or _dataset_dir(dataset).is_dir():
+        return dataset
+    if _remote_dataset_names().get(dataset):
         return dataset
     raise FileNotFoundError(f"Không tìm thấy bộ dữ liệu '{dataset}'")
 
@@ -1077,7 +1120,51 @@ def _run(options: dict[str, Any]) -> None:
                     if isinstance(data.get("total"), int):
                         total = data["total"]
 
+                    # The API answers HTTP 200 with an EMPTY items array once the
+                    # account runs out of credit -- it does not always send
+                    # credit.CREDIT_NOT_ENOUGH. Without this check the crawl
+                    # looked finished after a handful of pages and silently
+                    # under-collected (e.g. 500 of 1248 records).
+                    account_credit = (payload.get("credit") or {}).get("totalBalance")
+                    if isinstance(account_credit, int):
+                        _update(run_id, credit_remaining=account_credit)
+                    out_of_credit = isinstance(account_credit, int) and account_credit <= 0
+
                     if cancelled():
+                        break
+
+                    # An empty page is not data. Skip the write, and say WHICH
+                    # case it is so the user is not told "no more data" when the
+                    # real cause is a spent account.
+                    if not items:
+                        if out_of_credit:
+                            _update(
+                                run_id,
+                                page=page,
+                                records=len(seen),
+                                total=total,
+                                message=(
+                                    f"Tài khoản {account_index}/{len(accounts)} đã hết credit "
+                                    f"(còn {account_credit}) ở trang {page} — dừng, "
+                                    f"chưa lấy hết {total or '?'} bản ghi"
+                                ),
+                            )
+                            # Let the per-account handler mark it exhausted and
+                            # move to the next account instead of ending the job.
+                            raise crawler.CreditError(
+                                f"credit={account_credit} ở trang {page}"
+                            )
+                        _update(
+                            run_id,
+                            page=page,
+                            records=len(seen),
+                            total=total,
+                            message=(
+                                f"Tài khoản {account_index}/{len(accounts)}: trang {page} "
+                                f"trả về 0 bản ghi — dừng (không ghi trang rỗng)"
+                            ),
+                        )
+                        page += 1
                         break
 
                     # Keep every record the API returned for this page. Filtering
@@ -1186,13 +1273,37 @@ def _run(options: dict[str, Any]) -> None:
                 total=total,
             )
         else:
-            _credit_update(
-                run_id,
-                tracker,
-                status="completed",
-                message=f"Hoàn tất: {len(seen)} bản ghi",
-                records=len(seen),
-            )
+            # Never call a short crawl "completed". When the API reported more
+            # records than we stored, say so explicitly: this is the difference
+            # between "there is no more data" and "we stopped early", and the
+            # user needs to know which.
+            short_by = (total - len(seen)) if isinstance(total, int) and total > len(seen) else 0
+            if short_by > 0:
+                _credit_update(
+                    run_id,
+                    tracker,
+                    status="incomplete",
+                    message=(
+                        f"CHƯA ĐẦY ĐỦ: đã lưu {len(seen)}/{total} bản ghi "
+                        f"(thiếu {short_by}). Nguyên nhân thường gặp: tài khoản hết credit "
+                        f"giữa lúc crawl, hoặc API tạm ngừng trả dữ liệu. "
+                        f"Hãy dùng 'Crawl lại và ghi đè' để lấy tiếp."
+                    ),
+                    records=len(seen),
+                    total=total,
+                    incomplete=True,
+                    short_by=short_by,
+                )
+            else:
+                _credit_update(
+                    run_id,
+                    tracker,
+                    status="completed",
+                    message=f"Hoàn tất: {len(seen)} bản ghi",
+                    records=len(seen),
+                    incomplete=False,
+                    short_by=0,
+                )
     except (crawler.AuthError, crawler.CreditError) as exc:
         # The last account failed. With >= 1 account that always means every
         # account is out of credit, so end in the distinguishable no_credit
@@ -1559,6 +1670,7 @@ def dataset_summary(dataset: str):
         return jsonify({"error": str(exc)}), 400
     except FileNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
+    _restore_dataset_if_empty(name)
     return jsonify(_dataset_summary(name))
 
 
@@ -1620,6 +1732,8 @@ def download_dataset(dataset: str):
     except FileNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
 
+    # After a redeploy the pages live only in Storage; pull them first.
+    _restore_dataset_if_empty(name)
     pages = _dataset_page_files(name)
     if not pages:
         return jsonify({"error": "Bộ dữ liệu này chưa có file nào để tải"}), 404
@@ -1707,6 +1821,7 @@ def list_files():
 def get_file(dataset: str, page: str):
     try:
         dataset = _ensure_dataset(dataset)
+        _restore_dataset_if_empty(dataset)
         page_number = int(page)
         return jsonify({"page": page_number, "records": _read_page_in_dataset(dataset, page_number)})
     except (ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as exc:
@@ -1717,6 +1832,7 @@ def get_file(dataset: str, page: str):
 def update_file(dataset: str, page: str):
     try:
         dataset = _ensure_dataset(dataset)
+        _restore_dataset_if_empty(dataset)
         page_number = int(page)
         path = _dataset_page_path(dataset, page_number)
         payload = request.get_json(silent=True)
@@ -1740,6 +1856,7 @@ def export_csv():
         with job_lock:
             dataset_name = str(job.get("dataset_name", LEGACY_DATASET_NAME))
     dataset_name = _ensure_dataset(dataset_name)
+    _restore_dataset_if_empty(dataset_name)
     data_dir = _dataset_data_dir(dataset_name)
     if selected:
         try:

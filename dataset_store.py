@@ -45,6 +45,7 @@ __all__ = [
     "active",
     "bucket",
     "configured",
+    "dataset_page_counts",
     "download_dataset",
     "list_datasets",
     "object_key",
@@ -280,6 +281,40 @@ def list_datasets() -> list[str]:
         if row.get("name") and not str(row.get("name")).endswith(".json")
     }
     return sorted(names)
+
+
+def dataset_page_counts() -> dict[str, int]:
+    """Map dataset name -> number of page objects mirrored in Storage.
+
+    One listing per dataset. A failing dataset is skipped rather than aborting
+    the whole map, so one broken prefix cannot blank the picker.
+    """
+    if not configured():
+        return {}
+    try:
+        rows = _list_prefix("")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Không liệt kê được dataset trên Storage: %s", exc)
+        return {}
+
+    names = [
+        str(row.get("name"))
+        for row in rows
+        if row.get("name") and not str(row.get("name")).endswith(".json")
+    ]
+    counts: dict[str, int] = {}
+    for name in names:
+        try:
+            pages = _list_prefix(f"{name}/data")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Không liệt kê được %s trên Storage: %s", name, exc)
+            continue
+        counts[name] = sum(
+            1
+            for item in pages
+            if PAGE_RE.match(str(item.get("name") or ""))
+        )
+    return counts
 
 
 def _download_object(key: str) -> bytes | None:

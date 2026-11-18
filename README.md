@@ -498,8 +498,21 @@ Tool nhớ tiến độ theo **2 lớp**:
   chờ bạn paste cookie mới, rồi **tiếp tục từ curPage hiện tại** (không reset về 1).
 - **429**: tôn trọng `Retry-After`, sleep rồi retry.
 - **5xx**: retry với exponential backoff (tối đa 3 lần).
+- **Hết credit giữa lúc crawl (không báo lỗi):** đây là bẫy quan trọng. Khi tài
+  khoản cạn credit, API có thể vẫn trả **HTTP 200 kèm `items: []`** thay vì mã lỗi.
+  Nếu chỉ nhìn `items` rỗng thì rất dễ tưởng "đã hết dữ liệu" và **bỏ sót bản ghi**.
+  Crawler đọc `credit.totalBalance` ở mỗi trang:
+  - `totalBalance` về `0` → job kết thúc với status **`no_credit`**, không ghi trang rỗng.
+  - Hết trang nhưng `totalBalance` còn → **không ghi trang rỗng** và **không** báo "hoàn tất".
+- **Crawl ngắn hơn `total` mà API báo:** job kết thúc với status **`incomplete`**,
+  kèm `short_by` (số bản ghi còn thiếu) và banner đỏ trên dashboard. Đây là điểm
+  khác biệt giữa "không còn dữ liệu" và "dừng sớm" — luôn kiểm tra banner này
+  trước khi tin rằng đã lấy đủ.
 - Response thiếu `data.items`: log warning và skip trang.
 - **Ctrl+C**: lưu `state.json` (curPage hiện tại) rồi thoát gọn gàng.
+
+> Nếu thấy `incomplete`/`no_credit`: nạp thêm credit hoặc file tài khoản mới, rồi
+> chạy lại với **"Crawl lại và ghi đè"** để lấy tiếp phần còn thiếu.
 
 ## Lưu ý
 

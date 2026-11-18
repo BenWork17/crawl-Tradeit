@@ -91,6 +91,7 @@ Typical use::
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -105,6 +106,11 @@ __all__ = [
     "BACKEND_FILE",
     "BACKEND_FILE_FALLBACK",
     "BACKEND_SUPABASE",
+    "CREDITS_PER_SEARCH_REQUEST",
+    "CREDIT_AVAILABLE",
+    "CREDIT_EXHAUSTED",
+    "CREDIT_FILENAME",
+    "CREDIT_UNKNOWN",
     "DEFAULT_STORAGE_DIRNAME",
     "ENV_ACCOUNTS_FILE",
     "ENV_DATA_DIR",
@@ -115,18 +121,29 @@ __all__ = [
     "EXHAUSTION_NONE",
     "EXHAUSTION_SOME",
     "EXHAUSTION_UNKNOWN",
+    "MAX_CREDIT_RECORDS",
+    "NEW_ACCOUNT_CREDITS",
+    "PROBE_PER_PAGE",
+    "RECORDS_PER_CREDIT",
     "SUPABASE_DEFAULT_TABLE",
     "SUPABASE_ROW_ID",
     "CreditTracker",
+    "account_key",
+    "active_accounts",
     "active_backend",
     "classify_exhaustion",
     "clear",
+    "clear_credit",
+    "credit_records",
+    "credit_summary",
     "default_path",
     "default_storage_dir",
     "exhaustion_summary",
     "exists",
     "load",
     "load_with_status",
+    "record_balance",
+    "record_exhausted",
     "resolve_path",
     "save",
     "summary",
@@ -169,6 +186,8 @@ _TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 # committed.  The file name itself is git-ignored as well.
 DEFAULT_STORAGE_DIRNAME = "datasets"
 ACCOUNTS_FILENAME = "accounts.json"
+# The credit ledger lives beside the account store and is likewise git-ignored.
+CREDIT_FILENAME = "credit_ledger.json"
 
 FILE_VERSION = 1
 _FILE_MODE = 0o600
@@ -194,6 +213,40 @@ _REFRESH_KEYS = ("refresh_token", "refreshToken", "refresh")
 # Windows can briefly refuse os.replace() while another handle is open.
 _REPLACE_ATTEMPTS = 8
 _REPLACE_BACKOFF = 0.02
+
+# --- per-account credit knowledge -----------------------------------------
+#
+# The TradeIT search API reports ``credit.totalBalance`` in every search
+# response, but has no read-only credit endpoint: the only way to learn an
+# account's balance is to spend credit on a search.  The app therefore never
+# *asks* for a balance on its own.  It records the balance the API volunteered
+# during a crawl, which costs nothing extra, and remembers it here so the
+# dashboard can show a running total instead of forgetting it between runs.
+#
+# Accounts are keyed by an opaque fingerprint of their token, never by a token,
+# so the stored metadata can be summarised and shown without exposing a
+# credential.
+CREDIT_UNKNOWN = "unknown"       # never seen a balance (not used yet)
+CREDIT_AVAILABLE = "available"   # last known balance is above zero
+CREDIT_EXHAUSTED = "exhausted"   # the API said CREDIT_NOT_ENOUGH
+
+# How many credit records are kept in the store file.  The list is bounded
+# because accounts are long-lived but uploads rotate them.
+MAX_CREDIT_RECORDS = 500
+
+# A credit-check probe deliberately asks for a single record, which costs far
+# less than a normal page.  The exact price is TradeIT's; this is only used to
+# warn the user before a check runs, so an approximation is fine.
+CREDITS_PER_SEARCH_REQUEST = 500
+PROBE_PER_PAGE = 1
+# Records a single credit buys, derived from the log in this repo (50 records
+# per 500-credit request).  Used only for the "how many records can I still
+# crawl" estimate, so it degrades gracefully if the real price changes.
+RECORDS_PER_CREDIT = 0.1
+# A brand-new TradeIT account is documented (by the user) to start at 3000
+# credits.  This is the last-resort estimate for an account that has never been
+# measured; it is clearly labelled as an estimate in the UI, never as a reading.
+NEW_ACCOUNT_CREDITS = 3000
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +691,23 @@ def clear(path: str | os.PathLike[str] | None = None) -> bool:
     return _file_clear(path)
 
 
+def clear_credit() -> bool:
+    """Forget every recorded credit balance.  True when a ledger was removed.
+
+    Called when the account list is cleared: balances belong to specific
+    accounts, so keeping them after "forget my accounts" would leak how much
+    credit those (now removed) accounts had.
+    """
+    target = _credit_path()
+    try:
+        target.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise OSError(_safe_error("Không xóa được sổ credit", exc)) from None
+    logger.info("Đã xóa sổ credit đã lưu")
+    return True
+
 
 # ---------------------------------------------------------------------------
 # Credit exhaustion tracking
@@ -785,6 +855,252 @@ def exhaustion_summary(
     for index in exhausted_indices:
         tracker.mark_exhausted(index)
     return tracker.summary()
+
+
+# ---------------------------------------------------------------------------
+# Per-account credit ledger
+# ---------------------------------------------------------------------------
+
+
+def account_key(account: Mapping[str, Any] | str) -> str:
+    """Return a stable, non-reversible identifier for one account.
+
+    The ledger must survive a re-upload (the same token in a new Excel file is
+    still the same account), so accounts are keyed by a hash of the token rather
+    than by position.  The digest is truncated: it only has to separate the few
+    dozen accounts in one store, never resist a determined attacker, and keeping
+    it short keeps the stored JSON readable.  A token is never written here.
+    """
+    if isinstance(account, str):
+        token = account.strip()
+    else:
+        token = _clean_text(account.get(_TOKEN_KEY))
+    if not token:
+        return ""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def _credit_path() -> Path:
+    """Path of the credit ledger, next to the account store."""
+    return resolve_path(None).with_name(CREDIT_FILENAME)
+
+
+def _read_credit_ledger() -> dict[str, dict[str, Any]]:
+    """Read the ledger; a missing/corrupt file is simply an empty ledger."""
+    target = _credit_path()
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError):
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    rows = payload.get("accounts") if isinstance(payload, Mapping) else None
+    if not isinstance(rows, Mapping):
+        return {}
+    ledger: dict[str, dict[str, Any]] = {}
+    for key, value in rows.items():
+        if not isinstance(key, str) or not isinstance(value, Mapping):
+            continue
+        ledger[key] = _normalize_credit_record(value)
+    return ledger
+
+
+def _normalize_credit_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep only the known, secret-free fields of one ledger entry."""
+    balance = record.get("balance")
+    status = record.get("status")
+    if status not in (CREDIT_AVAILABLE, CREDIT_EXHAUSTED, CREDIT_UNKNOWN):
+        status = CREDIT_UNKNOWN
+    return {
+        "status": status,
+        "balance": balance if isinstance(balance, int) and balance >= 0 else None,
+        "checked_at": _as_text(record.get("checked_at")),
+        "source": _as_text(record.get("source")),
+    }
+
+
+def _write_credit_ledger(ledger: Mapping[str, Mapping[str, Any]]) -> None:
+    """Persist the ledger atomically (best effort -- never fatal)."""
+    # Bound the file: keep the most recently checked entries.
+    ordered = sorted(
+        ledger.items(),
+        key=lambda item: str(item[1].get("checked_at") or ""),
+        reverse=True,
+    )[:MAX_CREDIT_RECORDS]
+    payload = {
+        "version": 1,
+        "updated_at": _now_iso(),
+        "accounts": {key: dict(value) for key, value in ordered},
+    }
+    try:
+        _write_atomic(_credit_path(), payload)
+    except OSError as exc:
+        logger.warning("Không lưu được sổ credit: %s", _safe_error("", exc))
+
+
+def record_balance(
+    account: Mapping[str, Any] | str,
+    balance: Any,
+    source: str = "crawl",
+) -> None:
+    """Record the balance the API just reported for *account*.
+
+    Called with the ``credit.totalBalance`` of a normal search response, so it
+    adds no request and no cost.  A balance of ``0`` also flips the account to
+    exhausted, which is how the dashboard hides a spent account without ever
+    probing it.
+    """
+    key = account_key(account)
+    if not key or isinstance(balance, bool) or not isinstance(balance, int):
+        return
+    if balance < 0:
+        return
+    ledger = _read_credit_ledger()
+    ledger[key] = {
+        "status": CREDIT_AVAILABLE if balance > 0 else CREDIT_EXHAUSTED,
+        "balance": balance,
+        "checked_at": _now_iso(),
+        "source": source,
+    }
+    _write_credit_ledger(ledger)
+
+
+def record_exhausted(account: Mapping[str, Any] | str, source: str = "crawl") -> None:
+    """Mark *account* as out of credit (the API said CREDIT_NOT_ENOUGH).
+
+    The exact balance is unknown at that point -- the request was refused -- so
+    it is recorded as ``0``: the account has nothing left to spend, which is what
+    every consumer of this ledger actually needs to know.
+    """
+    key = account_key(account)
+    if not key:
+        return
+    ledger = _read_credit_ledger()
+    ledger[key] = {
+        "status": CREDIT_EXHAUSTED,
+        "balance": 0,
+        "checked_at": _now_iso(),
+        "source": source,
+    }
+    _write_credit_ledger(ledger)
+
+
+def credit_records(
+    accounts: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one credit record per supplied account, in the same order.
+
+    Accounts the ledger has never seen come back as ``unknown`` with no balance
+    -- never as a guess -- so the caller can distinguish "we know it is empty"
+    from "we have no idea".
+    """
+    ledger = _read_credit_ledger()
+    rows: list[dict[str, Any]] = []
+    for account in accounts:
+        key = account_key(account)
+        record = ledger.get(key)
+        rows.append(
+            {
+                "key": key,
+                "status": (record or {}).get("status", CREDIT_UNKNOWN),
+                "balance": (record or {}).get("balance"),
+                "checked_at": (record or {}).get("checked_at"),
+                "source": (record or {}).get("source"),
+            }
+        )
+    return rows
+
+
+def credit_summary(
+    accounts: Iterable[Mapping[str, Any]],
+    *,
+    estimate_unmeasured: bool = True,
+) -> dict[str, Any]:
+    """Summarise the credit position of an account list.
+
+    Returns counts and totals only -- never a token:
+
+    * ``total_known``: sum of measured balances (exhausted accounts count 0).
+    * ``total_estimated``: ``total_known`` plus a documented starting balance for
+      accounts that were never measured, so a fresh upload can show a useful
+      number immediately.  ``estimated_count`` says how many were guessed.
+    * ``active`` / ``exhausted`` / ``unknown``: account counts by state.
+    * ``records_estimate``: how many records the measured credit can still buy,
+      using :data:`RECORDS_PER_CREDIT`.
+
+    The two totals are reported separately on purpose: a guessed 3000 must never
+    be indistinguishable from a balance the API actually returned.
+    """
+    account_list = list(accounts)
+    rows = credit_records(account_list)
+    active = exhausted = unknown = 0
+    total_known = 0
+    total_estimated = 0
+    for row in rows:
+        status = row["status"]
+        balance = row["balance"]
+        if status == CREDIT_EXHAUSTED:
+            exhausted += 1
+        elif status == CREDIT_AVAILABLE:
+            active += 1
+            total_known += int(balance or 0)
+            total_estimated += int(balance or 0)
+        else:
+            unknown += 1
+            if estimate_unmeasured:
+                total_estimated += NEW_ACCOUNT_CREDITS
+
+    usable = total_estimated if estimate_unmeasured else total_known
+    # An account with no recorded balance is *not* excluded from the total: the
+    # user's expectation is "how much can I still crawl", and an unused account
+    # certainly can be crawled.  Its starting balance is flagged separately so
+    # the number is never mistaken for a measurement.
+    return {
+        "count": len(account_list),
+        "active": active,
+        "exhausted": exhausted,
+        "unknown": unknown,
+        "usable": active + (unknown if estimate_unmeasured else 0),
+        "total_known": total_known,
+        "total_estimated": total_estimated,
+        "estimated_count": unknown if estimate_unmeasured else 0,
+        "records_estimate": int(usable * RECORDS_PER_CREDIT),
+        "accounts": [
+            {
+                "position": index + 1,
+                "status": row["status"],
+                "balance": row["balance"],
+                "checked_at": row["checked_at"],
+            }
+            for index, row in enumerate(rows)
+        ],
+    }
+
+
+def active_accounts(
+    accounts: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the accounts still worth trying, in their original order.
+
+    An account is skipped only when the ledger *knows* it is empty
+    (``exhausted``).  Accounts with an unknown balance are kept: refusing them
+    would mean a first crawl could never start, since nothing is known yet.
+
+    This is what makes a spent account disappear from the list the crawler
+    iterates without ever deleting the user's stored credentials.
+    """
+    account_list = list(accounts)
+    rows = credit_records(account_list)
+    keep: list[dict[str, Any]] = []
+    for account, row in zip(account_list, rows):
+        if row["status"] == CREDIT_EXHAUSTED:
+            continue
+        keep.append(account)
+    return keep
 
 
 # ---------------------------------------------------------------------------

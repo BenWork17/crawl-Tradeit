@@ -1268,6 +1268,10 @@
     const creditText = String(data.credit_message || '');
     const allExhausted = status === 'no_credit' || creditStatus === 'all';
     const partial = !allExhausted && creditStatus === 'some' && exhausted > 0;
+    // The API reported more records than we stored: the crawl stopped early.
+    // This is the case the user must never mistake for "no more data".
+    const incomplete = !allExhausted && (status === 'incomplete' || data.incomplete === true);
+    const shortBy = Number(data.short_by || 0);
 
     // Status-card counters (visible for any non-zero exhaustion).
     if (stat && label && creditMessage) {
@@ -1288,6 +1292,18 @@
         || (data.message || '');
       document.getElementById('credit-banner-hint').textContent =
         'Crawl đã dừng vì không còn tài khoản nào dùng được. Chọn file mới ở mục "File Excel danh sách tài khoản" rồi bắt đầu lại.';
+    } else if (incomplete) {
+      banner.hidden = false;
+      banner.classList.add('is-warning');
+      document.getElementById('credit-banner-icon').textContent = '⚠';
+      document.getElementById('credit-banner-title').textContent =
+        'Crawl chưa lấy hết dữ liệu';
+      document.getElementById('credit-banner-message').textContent =
+        data.message || `Đã lưu ${data.records || 0}/${data.total || '?'} bản ghi`
+          + (shortBy > 0 ? ` (thiếu ${shortBy}).` : '.');
+      document.getElementById('credit-banner-hint').textContent =
+        'Bộ dữ liệu chưa đầy đủ. Nguyên nhân thường gặp: tài khoản hết credit giữa lúc crawl '
+        + 'hoặc API tạm ngừng trả dữ liệu. Hãy tick "Crawl lại và ghi đè" để lấy tiếp.';
     } else if (partial) {
       banner.hidden = false;
       banner.classList.add('is-notice');
@@ -1468,7 +1484,13 @@
     const input = document.getElementById('dataset_name');
     select.innerHTML = [
       '<option value="__custom__">Tạo / nhập bộ dữ liệu mới...</option>',
-      ...data.datasets.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.label)}${item.files ? ` (${item.files})` : ''}</option>`)
+      ...data.datasets.map(item => {
+        // Distinguish a dataset that only lives in Supabase Storage: it is not
+        // on this container's disk yet and gets pulled down on first open.
+        const count = item.files ? ` (${item.files})` : '';
+        const where = item.in_storage && !item.local_files ? ' ☁' : '';
+        return `<option value="${escapeHtml(item.name)}">${escapeHtml(item.label)}${count}${where}</option>`;
+      })
     ].join('');
     // A rejected submit may have carried an explicitly chosen dataset; that
     // choice outranks the server's current one, otherwise the retry would land
