@@ -150,7 +150,28 @@ def _write_xlsx(
     records: list[tuple[int, dict[str, Any]]],
     output: Path,
 ) -> tuple[int, int]:
-    """Write flattened records to an Excel workbook while preserving text values."""
+    """Write flattened records to an Excel file on disk."""
+    buffer = _xlsx_buffer(records)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(buffer.getvalue())
+    return buffer.written, buffer.skipped
+
+
+class _XlsxBuffer(BytesIO):
+    """A BytesIO that carries the written/skipped counters of one workbook."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.written = 0
+        self.skipped = 0
+
+
+def _xlsx_buffer(records: list[tuple[int, dict[str, Any]]]) -> _XlsxBuffer:
+    """Build an .xlsx workbook in memory, preserving text values.
+
+    Used by both the on-disk export and the "download dataset" button, so the
+    two produce byte-identical workbooks.
+    """
     columns: dict[str, None] = {"_source_page": None}
     for _, record in records:
         for key in record:
@@ -196,10 +217,14 @@ def _write_xlsx(
         sheet.column_dimensions[column_cells[0].column_letter].width = min(
             max(max_length + 2, 12), 42
         )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output)
+
+    buffer = _XlsxBuffer()
+    workbook.save(buffer)
     workbook.close()
-    return written, skipped
+    buffer.seek(0)
+    buffer.written = written
+    buffer.skipped = skipped
+    return buffer
 
 
 def _clean_name(name: str) -> str:
@@ -1580,20 +1605,51 @@ def backup_dataset(dataset: str):
 
 @app.get("/api/datasets/<dataset>/download")
 def download_dataset(dataset: str):
-    """Download every page file of a dataset as one ZIP archive."""
+    """Download a whole dataset as one Excel workbook.
+
+    This used to return a ZIP of the raw JSON pages, which meant opening a
+    dozen files to read the data. It now returns the same .xlsx the export
+    button produces (one row per record, one column per field, text-formatted
+    so HS codes keep their leading zeros). ``?format=zip`` still serves the
+    raw JSON for anyone who wants the pages themselves.
+    """
     try:
         name = _require_dataset(dataset)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except FileNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
-    if not _dataset_page_files(name):
+
+    pages = _dataset_page_files(name)
+    if not pages:
         return jsonify({"error": "Bộ dữ liệu này chưa có file nào để tải"}), 404
+
+    if request.args.get("format", "").strip().lower() == "zip":
+        return send_file(
+            _zip_dataset(name),
+            as_attachment=True,
+            download_name=f"{name}-json.zip",
+            mimetype="application/zip",
+        )
+
+    records: list[tuple[int, dict[str, Any]]] = []
+    for path in pages:
+        page = merge_data.page_number(path)
+        try:
+            payload = _read_page_in_dataset(name, page)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return jsonify({"error": f"Trang {page}: {exc}"}), 400
+        records.extend((page, merge_data.flatten(item)) for item in payload)
+
+    if not records:
+        return jsonify({"error": "Bộ dữ liệu này chưa có bản ghi nào"}), 404
+
+    buffer = _xlsx_buffer(records)
     return send_file(
-        _zip_dataset(name),
+        buffer,
         as_attachment=True,
-        download_name=f"{name}-json.zip",
-        mimetype="application/zip",
+        download_name=f"{name}-buyers.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 

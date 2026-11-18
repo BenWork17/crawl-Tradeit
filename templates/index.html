@@ -400,7 +400,7 @@
               <button type="button" class="dataset-create" onclick="openDatasetModal()">+ Tạo bộ mới</button>
             </div>
             <div class="dataset-actions">
-              <button type="button" id="dataset-download" class="secondary" onclick="downloadDataset()" title="Tải toàn bộ file JSON của bộ dữ liệu đang chọn">⬇ Tải bộ dữ liệu</button>
+              <button type="button" id="dataset-download" class="secondary" onclick="downloadDataset()" title="Tải toàn bộ bộ dữ liệu đang chọn ra một file Excel (.xlsx)">⬇ Tải bộ dữ liệu (.xlsx)</button>
               <button type="button" id="dataset-view" class="ghost" onclick="openDatasetView()" title="Xem chi tiết bộ dữ liệu đang chọn">👁 Xem bộ dữ liệu</button>
               <button type="button" id="dataset-delete" class="danger" onclick="openDeleteDatasetModal()" title="Xóa bộ dữ liệu đang chọn">✕ Xóa bộ dữ liệu</button>
             </div>
@@ -599,7 +599,8 @@
       <div id="dataset-view-files"></div>
     </div>
     <div class="actions">
-      <button type="button" onclick="downloadDataset()">⬇ Tải bộ dữ liệu</button>
+      <button type="button" onclick="downloadDataset()">⬇ Tải bộ dữ liệu (.xlsx)</button>
+      <button type="button" class="secondary" onclick="downloadDataset('zip')" title="Tải ZIP chứa các file JSON gốc">⬇ ZIP (JSON gốc)</button>
       <button type="button" class="secondary" onclick="exportSelected()">Tải Excel .xlsx</button>
       <button type="button" class="ghost" onclick="closeDatasetView()">Đóng</button>
     </div>
@@ -1630,8 +1631,9 @@
     return data;
   }
 
-  // --- Tải bộ dữ liệu (ZIP toàn bộ file JSON) -------------------------------
-  async function downloadDataset() {
+  // --- Tải bộ dữ liệu (một file Excel gộp toàn bộ trang) --------------------
+  // Dùng ?format=zip nếu muốn file ZIP chứa JSON gốc.
+  async function downloadDataset(format) {
     const dataset = currentDataset();
     // The file list already knows whether this dataset has pages, so stop here
     // instead of navigating the tab onto the API's JSON 404 page.
@@ -1645,7 +1647,8 @@
         return;
       }
     }
-    window.location.href = `/api/datasets/${encodeURIComponent(dataset)}/download`;
+    const suffix = format === 'zip' ? '?format=zip' : '';
+    window.location.href = `/api/datasets/${encodeURIComponent(dataset)}/download${suffix}`;
   }
 
   // --- Xem bộ dữ liệu (chi tiết + chọn trang) ------------------------------

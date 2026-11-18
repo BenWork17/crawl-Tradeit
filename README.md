@@ -167,7 +167,7 @@ Ngay dưới ô chọn **Bộ dữ liệu đang chọn** có ba nút thao tác t
 
 | Nút | Việc gì xảy ra |
 |-----|----------------|
-| **⬇ Tải bộ dữ liệu** | Tải một file ZIP chứa toàn bộ `data/<trang>.json` của bộ đó (kèm `state.json` và `data.csv` nếu có). Bộ rỗng trả về lỗi 404 thay vì tải file trống. |
+| **⬇ Tải bộ dữ liệu (.xlsx)** | Tải toàn bộ bộ dữ liệu đang chọn ra **một file Excel** — mỗi bản ghi một dòng, mỗi trường một cột (giống nút xuất Excel). Bộ rỗng trả về lỗi 404 thay vì tải file trống. Trong hộp thoại **Xem bộ dữ liệu** còn nút **ZIP (JSON gốc)** nếu bạn cần các file `data/<trang>.json` thô (tương ứng `?format=zip`). |
 | **👁 Xem bộ dữ liệu** | Mở hộp thoại chi tiết: số file, tổng bản ghi, dung lượng, trang lớn nhất, điều kiện tìm kiếm đã lưu trong `state.json` và bảng từng trang (số bản ghi, số cột, dung lượng). Bấm **Xem / sửa** trên một dòng để mở bảng chỉnh sửa của trang đó. |
 | **✕ Xóa bộ dữ liệu** | Xóa vĩnh viễn dữ liệu của bộ đang chọn. Phải gõ lại đúng tên bộ dữ liệu để nút **Xóa vĩnh viễn** bật lên; hộp thoại hiển thị trước số file và số bản ghi sẽ mất. |
 
