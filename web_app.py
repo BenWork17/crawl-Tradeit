@@ -1238,6 +1238,19 @@ def _run(options: dict[str, Any]) -> None:
             if cancelled():
                 break
 
+            # We may already have everything the API said exists (for example
+            # after failing over from a spent account). Starting another account
+            # would burn credit for nothing and add duplicate pages, so stop.
+            if total is not None and len(seen) >= total:
+                _update(
+                    run_id,
+                    message=(
+                        f"Đã đủ {len(seen)}/{total} bản ghi — dừng trước khi dùng "
+                        f"tài khoản {account_index}/{len(accounts)}"
+                    ),
+                )
+                break
+
             cookie = (
                 f"{crawler.CRM_TOKEN_NAME}={account['token']}; "
                 f"{crawler.CRM_RF_TOKEN_NAME}={account['refresh_token']}"
