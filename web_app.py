@@ -112,9 +112,24 @@ job: dict[str, Any] = {
     "incomplete": False,
     "short_by": 0,
     "backup_error": "",
+    # Credit position of the *stored* account list, so the dashboard can show
+    # "còn X credit / Y acc hoạt động" without opening a dialog. Exhausted
+    # accounts are excluded from the total by accounts_store.credit_summary.
+    "accounts_credit_total": 0,
+    "accounts_credit_measured": 0,
+    "accounts_credit_estimated_count": 0,
+    "accounts_credit_active": 0,
+    "accounts_credit_exhausted": 0,
+    "accounts_credit_unknown": 0,
+    "accounts_credit_records": 0,
 }
 stop_event = threading.Event()
 ALLOWED_ACCOUNT_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
+# Shortest HS code the TradeIT search form accepts. A credit probe only needs the
+# API to answer (the balance is in every response), so this keeps the request
+# valid when no real query has been configured yet.
+PROBE_FALLBACK_HS_CODE = "09"
+PROBE_FALLBACK_REGION = "NL"
 
 
 def _page_path(raw_page: str) -> Path:
@@ -890,7 +905,52 @@ def _accounts_public_summary() -> dict[str, Any]:
     }
     if info.get("fallback_reason"):
         summary["fallback_reason"] = info.get("fallback_reason")
+    summary["credit"] = _accounts_credit_summary()
     return summary
+
+
+def _accounts_credit_summary() -> dict[str, Any]:
+    """Credit position of the stored accounts, safe to publish.
+
+    Counts, totals and 1-based positions only: ``accounts_store`` never returns
+    a token here, so this can go straight into an HTTP response.
+
+    ``total`` sums the measured balances plus a documented starting balance for
+    accounts that were never used (``estimated_count`` says how many were
+    guessed). Exhausted accounts contribute nothing and are reported separately
+    so the UI can hide them while still telling the user how many were dropped.
+    """
+    try:
+        accounts = accounts_store.load()
+        info = accounts_store.credit_summary(accounts)
+    except (OSError, ValueError):
+        return {
+            "available": False,
+            "count": 0,
+            "active": 0,
+            "exhausted": 0,
+            "unknown": 0,
+            "total": 0,
+            "measured": 0,
+            "estimated_count": 0,
+            "records_estimate": 0,
+            "accounts": [],
+        }
+    return {
+        "available": True,
+        "count": int(info.get("count") or 0),
+        "active": int(info.get("active") or 0),
+        "exhausted": int(info.get("exhausted") or 0),
+        "unknown": int(info.get("unknown") or 0),
+        "usable": int(info.get("usable") or 0),
+        "total": int(info.get("total_estimated") or 0),
+        "measured": int(info.get("total_known") or 0),
+        "estimated_count": int(info.get("estimated_count") or 0),
+        "records_estimate": int(info.get("records_estimate") or 0),
+        "new_account_credits": accounts_store.NEW_ACCOUNT_CREDITS,
+        "records_per_credit": accounts_store.RECORDS_PER_CREDIT,
+        "accounts": list(info.get("accounts") or []),
+    }
 
 
 def _accounts_from_upload(upload: Any) -> list[dict[str, str]]:
@@ -947,6 +1007,65 @@ def _accounts_from_upload(upload: Any) -> list[dict[str, str]]:
 def _accounts_from_store() -> list[dict[str, str]]:
     """Load the accounts saved by an earlier run ([] when none usable)."""
     return accounts_store.load()
+
+
+def _credit_balance(payload: Any) -> int | None:
+    """Extract ``credit.totalBalance`` from a search response.
+
+    Returns ``None`` when the field is absent or not an integer, so callers can
+    tell "the API did not say" from "the API said 0" -- the difference between
+    "unknown" and "spent", which the whole credit panel depends on.
+    """
+    if not isinstance(payload, dict):
+        return None
+    credit = payload.get("credit")
+    if not isinstance(credit, dict):
+        return None
+    balance = credit.get("totalBalance")
+    if isinstance(balance, bool) or not isinstance(balance, int):
+        return None
+    return balance if balance >= 0 else None
+
+
+def _probe_body(requested: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build the cheapest valid search body for a credit probe.
+
+    ``credit.totalBalance`` does not depend on the query, so any body the site
+    accepts will do; the goal is only to make the API answer. Preference order:
+
+    1. the query the user has just typed in the form, so a probe never quietly
+       searches for something else;
+    2. the query stored for the selected dataset;
+    3. a minimal HS code, which the site accepts and which still returns a
+       balance -- this is what makes "check credit right after uploading"
+       work, before any crawl has ever run.
+
+    None of these change the cost: the probe always asks for a single record.
+    """
+    requested = requested or {}
+
+    hs_code = str(requested.get("hs_code") or "").strip()
+    if hs_code:
+        raw_regions = requested.get("region_codes") or []
+        if isinstance(raw_regions, str):
+            raw_regions = [raw_regions]
+        return crawler.build_search_body(hs_code, [str(v) for v in raw_regions])
+
+    with job_lock:
+        dataset_name = str(job.get("dataset_name") or LEGACY_DATASET_NAME)
+    query = _dataset_query(dataset_name)
+    if query:
+        # Stored as ``hsCode|CODE,CODE`` by crawler.query_fingerprint.
+        stored_hs, _, codes = query.partition("|")
+        region_codes = [code for code in codes.split(",") if code.strip()]
+        if stored_hs.strip():
+            return crawler.build_search_body(stored_hs.strip(), region_codes)
+
+    # Last resort: the shortest HS code the site accepts, with no country filter.
+    # ``build_search_body`` rejects an empty region list, so one country is
+    # passed purely to satisfy the schema -- the balance in the response does not
+    # depend on it, and the probe stores no data.
+    return crawler.build_search_body(PROBE_FALLBACK_HS_CODE, [PROBE_FALLBACK_REGION])
 
 
 def _resolve_accounts(
@@ -1006,6 +1125,31 @@ def _credit_update(
     )
 
 
+def _publish_credit_summary() -> None:
+    """Publish the account list's credit position into ``job`` for the UI.
+
+    Reads the stored (not uploaded) accounts because that is the list the
+    dashboard shows; a run's own in-memory list is written back to the store
+    before this is called.  Never raises: a broken ledger must not stop a crawl
+    from reporting progress.
+    """
+    try:
+        accounts = accounts_store.load()
+        info = accounts_store.credit_summary(accounts)
+    except (OSError, ValueError):
+        return
+    _update(
+        None,
+        accounts_credit_active=int(info.get("active") or 0),
+        accounts_credit_exhausted=int(info.get("exhausted") or 0),
+        accounts_credit_unknown=int(info.get("unknown") or 0),
+        accounts_credit_total=int(info.get("total_estimated") or 0),
+        accounts_credit_measured=int(info.get("total_known") or 0),
+        accounts_credit_estimated_count=int(info.get("estimated_count") or 0),
+        accounts_credit_records=int(info.get("records_estimate") or 0),
+    )
+
+
 def _update(run_id: int | None = None, **values: Any) -> None:
     with job_lock:
         if run_id is not None and job.get("run_id") != run_id:
@@ -1023,6 +1167,17 @@ def _run(options: dict[str, Any]) -> None:
     accounts: list[dict[str, str]] = options["accounts"]
     dataset_name: str = options["dataset_name"]
     accounts_source: str = options.get("accounts_source", "")
+    # Skip accounts the ledger already knows are empty. They stay in storage
+    # (the user asked for a label, not a deletion), they are just not retried:
+    # a spent token can only fail again and waste a run.
+    skipped_exhausted = 0
+    try:
+        usable = accounts_store.active_accounts(accounts)
+        skipped_exhausted = len(accounts) - len(usable)
+        accounts = usable
+    except (OSError, ValueError):
+        # A broken ledger must never block a crawl: fall back to the full list.
+        skipped_exhausted = 0
     # Resolve this run's paths once. The crawler's module globals are shared by
     # every thread, so a stopped run that wakes up late could otherwise write
     # its pages into whatever dataset the *next* job selected.
@@ -1053,7 +1208,11 @@ def _run(options: dict[str, Any]) -> None:
     _update(
         run_id,
         status="running",
-        message="Đang chuẩn bị crawl",
+        message=(
+            f"Đang chuẩn bị crawl ({skipped_exhausted} tài khoản hết credit được bỏ qua)"
+            if skipped_exhausted
+            else "Đang chuẩn bị crawl"
+        ),
         page=page,
         records=len(seen),
         total=total,
@@ -1068,7 +1227,12 @@ def _run(options: dict[str, Any]) -> None:
 
     try:
         if not accounts:
-            raise ValueError("Chưa có tài khoản hợp lệ")
+            raise ValueError(
+                "Tất cả tài khoản trong danh sách đã hết credit. "
+                "Hãy upload file Excel tài khoản mới để tiếp tục crawl."
+                if skipped_exhausted
+                else "Chưa có tài khoản hợp lệ"
+            )
 
         for account_index, account in enumerate(accounts, start=1):
             if cancelled():
@@ -1128,6 +1292,14 @@ def _run(options: dict[str, Any]) -> None:
                     account_credit = (payload.get("credit") or {}).get("totalBalance")
                     if isinstance(account_credit, int):
                         _update(run_id, credit_remaining=account_credit)
+                        # The balance arrived with the search response, so
+                        # recording it costs nothing extra. This is what feeds
+                        # the "credit left / active accounts" panel.
+                        try:
+                            accounts_store.record_balance(account, account_credit)
+                            _publish_credit_summary()
+                        except (OSError, ValueError) as exc:
+                            print(f"[WARN] Không ghi được credit: {exc}")
                     out_of_credit = isinstance(account_credit, int) and account_credit <= 0
 
                     if cancelled():
@@ -1222,6 +1394,19 @@ def _run(options: dict[str, Any]) -> None:
                 # final handler below turns this into the no-credit state.
                 position = account_index - 1
                 tracker.mark_exhausted(position)
+                # Persist the outcome so the account drops out of the "credit
+                # left / active accounts" panel and is not retried next run.
+                # A token rejected as expired is treated the same way: either
+                # way that account cannot produce data, and the user needs to
+                # notice. Only CreditError means the balance is really zero.
+                try:
+                    if isinstance(exc, crawler.CreditError):
+                        accounts_store.record_exhausted(account)
+                    else:
+                        accounts_store.record_exhausted(account, source="auth")
+                    _publish_credit_summary()
+                except (OSError, ValueError) as store_exc:
+                    print(f"[WARN] Không ghi được credit: {store_exc}")
                 if account_index >= len(accounts):
                     raise
                 _credit_update(
@@ -1346,6 +1531,10 @@ def _run(options: dict[str, Any]) -> None:
 
 @app.get("/")
 def index():
+    # Refresh the credit panel on every page load so a browser reload after an
+    # upload (or after the ledger was written by a finished run) shows the
+    # current totals instead of whatever the last run left behind.
+    _publish_credit_summary()
     with job_lock:
         current = {key: value for key, value in job.items() if key != "stop_token"}
     # ``error`` and ``form_values`` are always present so the template can rely
@@ -1527,6 +1716,9 @@ def stop_job():
 
 @app.get("/api/status")
 def status():
+    # Re-publish on demand: the ledger can change without a crawl (a credit
+    # probe, a cleared list) and the status poll is what the UI trusts.
+    _publish_credit_summary()
     with job_lock:
         return jsonify({key: value for key, value in job.items() if key != "stop_token"})
 
@@ -1538,8 +1730,131 @@ def accounts_status():
     The dashboard uses this to show "3 tài khoản, cập nhật lúc ..." and to decide
     whether the file input is still mandatory. Only the count, timestamp, state
     and safe message are returned -- never a token, and not the filesystem path.
+    ``credit`` carries the balance summary, which is counts and totals only.
     """
+    _publish_credit_summary()
     return jsonify(_accounts_public_summary())
+
+
+@app.post("/api/accounts/credit-probe")
+def accounts_credit_probe():
+    """Measure the balance of each stored account with one cheap search each.
+
+    The API has no read-only credit endpoint, so the only way to learn a balance
+    is to perform a search -- which costs credit. This route therefore:
+
+    * requires an explicit ``confirm=true`` (the UI shows the cost first),
+    * asks for a single record per account (``perPage=1``) instead of a full
+      page, which is the cheapest request the API accepts,
+    * refuses while a crawl is running, so it cannot race with the job,
+    * records the result (including "spent") and reports it without a token.
+
+    The search body is built from the stored dataset query when one is known, so
+    the probe asks the same question a real crawl would; otherwise a bare body is
+    used, which still returns the account's balance.
+    """
+    payload = request.get_json(silent=True) or {}
+    if not (payload.get("confirm") is True or str(payload.get("confirm")) == "true"):
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "Kiểm tra credit sẽ tốn credit thật của mỗi tài khoản. "
+                        "Hãy xác nhận trước khi chạy."
+                    ),
+                    "needs_confirm": True,
+                }
+            ),
+            400,
+        )
+
+    with job_lock:
+        if job.get("status") == "running":
+            return (
+                jsonify({"error": "Đang có job chạy. Hãy dừng job trước khi kiểm tra credit."}),
+                409,
+            )
+
+    accounts = _accounts_from_store()
+    if not accounts:
+        return jsonify({"error": "Chưa có danh sách tài khoản nào được lưu."}), 400
+
+    try:
+        body = _probe_body(payload)
+    except (ValueError, regions.RegionError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    results: list[dict[str, Any]] = []
+    for position, account in enumerate(accounts, start=1):
+        cookie = (
+            f"{crawler.CRM_TOKEN_NAME}={account['token']}; "
+            f"{crawler.CRM_RF_TOKEN_NAME}={account['refresh_token']}"
+        )
+        session = requests.Session()
+        try:
+            payload = crawler.fetch_page(
+                session, cookie, 1, accounts_store.PROBE_PER_PAGE, body
+            )
+            balance = _credit_balance(payload)
+            if isinstance(balance, int):
+                accounts_store.record_balance(account, balance, source="probe")
+                results.append(
+                    {
+                        "position": position,
+                        "status": (
+                            accounts_store.CREDIT_AVAILABLE
+                            if balance > 0
+                            else accounts_store.CREDIT_EXHAUSTED
+                        ),
+                        "balance": balance,
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "position": position,
+                        "status": accounts_store.CREDIT_UNKNOWN,
+                        "balance": None,
+                    }
+                )
+        except crawler.CreditError:
+            accounts_store.record_exhausted(account, source="probe")
+            results.append(
+                {
+                    "position": position,
+                    "status": accounts_store.CREDIT_EXHAUSTED,
+                    "balance": 0,
+                }
+            )
+        except (crawler.AuthError, requests.RequestException) as exc:
+            # A rejected/expired token is not a balance reading: report it as
+            # unknown rather than claiming the account is out of credit.
+            results.append(
+                {
+                    "position": position,
+                    "status": accounts_store.CREDIT_UNKNOWN,
+                    "balance": None,
+                    "error": str(exc),
+                }
+            )
+        finally:
+            session.close()
+
+    _publish_credit_summary()
+    summary = _accounts_credit_summary()
+    probed = [row for row in results if row["status"] != accounts_store.CREDIT_UNKNOWN]
+    return jsonify(
+        {
+            "results": results,
+            "probed": len(probed),
+            "unknown": len(results) - len(probed),
+            "summary": summary,
+            "message": (
+                f"Đã kiểm tra {len(results)} tài khoản: "
+                f"{summary['active']} còn credit, {summary['exhausted']} hết credit."
+            ),
+        }
+    )
 
 
 @app.post("/api/accounts/clear")
@@ -1560,6 +1875,10 @@ def accounts_clear():
         )
     try:
         removed = accounts_store.clear()
+        # Balances belong to specific accounts: keeping them after "forget my
+        # accounts" would leave the UI showing credit for credentials that no
+        # longer exist.
+        accounts_store.clear_credit()
     except OSError as exc:
         return jsonify({"error": f"Không xóa được danh sách tài khoản: {exc}"}), 500
     return jsonify(

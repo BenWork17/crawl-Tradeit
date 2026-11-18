@@ -156,6 +156,47 @@ lần crawl sau không phải upload lại — xem [Lưu tài khoản bằng Sup
 ghi ra `logs/` hay trả về qua API; chỉ có file lưu tài khoản (hoặc hàng Supabase)
 chứa token.
 
+### Credit của danh sách tài khoản
+
+Dưới ô chọn file là panel **Credit còn lại / Acc còn hoạt động / Crawl được thêm**.
+
+Điểm quan trọng: **TradeIT không có API xem credit miễn phí.** Credit chỉ xuất hiện
+trong `credit.totalBalance` của response search, mà mỗi request search đều tốn
+credit. Vì vậy:
+
+- **Theo mặc định, app không bao giờ gọi thêm request nào để xem credit.** Mỗi lần
+  crawl, số dư API trả về sẵn trong response được ghi lại — miễn phí, vì request đó
+  dù sao cũng phải chạy để lấy dữ liệu.
+- Acc **chưa từng dùng** chưa có số dư thật. Panel vẫn tính chúng theo mức khởi tạo
+  **3000 credit/acc** nhưng **ghi rõ là ước tính** (`1.500 đo được + ~3.000 ước tính
+  cho 1 acc chưa dùng`), để con số đo được không bao giờ bị nhầm với con số đoán.
+- Nút **Kiểm tra credit từng acc** mới là thứ *chủ động* tốn credit: nó gửi 1
+  request/acc với `perPage=1` (rẻ nhất có thể) và **hỏi xác nhận trước** khi chạy.
+  Nút này bị chặn khi đang có job chạy.
+
+Cách xử lý acc hết credit:
+
+- Acc bị API báo hết credit (hoặc trả `credit.totalBalance = 0`, hoặc bị từ chối
+  `credit.CREDIT_NOT_ENOUGH`) được **gán nhãn `exhausted`** trong
+  `datasets/credit_ledger.json`.
+- Acc đã `exhausted` bị **loại khỏi tổng credit, khỏi số acc hoạt động và khỏi lượt
+  crawl sau** — nhưng **không bị xóa** khỏi danh sách đã lưu, đúng như yêu cầu
+  "gán nhãn và không hiển thị". Upload lại Excel không làm mất nhãn này: sổ credit
+  khóa theo **hash của token**, không theo vị trí dòng.
+- **Crawl được thêm** = `credit còn lại × 0,1 bản ghi/credit`, tức theo mức đã quan
+  sát trong repo này (50 bản ghi/request, 500 credit/request). Đây là ước tính để
+  bạn biết còn chạy được bao lâu, không phải con số TradeIT cam kết.
+- `Xóa tài khoản đã lưu` cũng xóa luôn sổ credit (số dư thuộc về acc, không nên
+  còn hiển thị khi acc đã bị quên).
+
+Mọi thứ panel này hiển thị đều là **số đếm và tổng** — không bao giờ là token.
+
+Hai endpoint liên quan: `GET /api/accounts` (trả thêm khối `credit` gồm `total`,
+`measured`, `active`, `exhausted`, `unknown`, `records_estimate` và trạng thái từng
+acc theo **vị trí**) và `POST /api/accounts/credit-probe` (bắt buộc
+`{"confirm": true}`, trả `400` nếu thiếu và `409` nếu đang có job chạy).
+`/api/status` cũng mang các tổng này ở các khóa `accounts_credit_*`.
+
 Các file `data/`, `datasets/`, `state.json` và file Excel vẫn nằm trên filesystem
 của container. Trên hosting miễn phí (kể cả Render free) filesystem đó là **tạm
 thời**: mất khi redeploy và khi service ngủ đông. Hãy tải dữ liệu về sau mỗi phiên
@@ -378,6 +419,10 @@ khi truyền `path=`):
 2. `TRADEIT_ACCOUNTS_FILE` — đường dẫn **file** đầy đủ;
 3. `TRADEIT_DATA_DIR` + `/accounts.json` — **thư mục** chứa file;
 4. mặc định `<project>/datasets/accounts.json` (đã nằm trong `.gitignore`).
+
+Sổ credit (`credit_ledger.json`) luôn nằm **cạnh** file tài khoản, cùng thư mục và
+cùng chế độ bảo vệ. Nó chỉ chứa `status` / `balance` / `checked_at` khóa theo hash
+token, không chứa token.
 
 `TRADEIT_DATA_DIR` và `TRADEIT_ACCOUNTS_FILE` chỉ có ý nghĩa với backend file. Trên
 Render free chúng trỏ vào filesystem tạm nên **không** giúp dữ liệu sống sót qua
